@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="ja">
 <head>
   <meta charset="utf-8">
   <title>WebAR Car Test</title>
@@ -7,9 +7,49 @@
 
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+
+    #infoBox {
+      position: fixed;
+      left: 50%;
+      bottom: 90px;
+      transform: translateX(-50%);
+      z-index: 999;
+      background: rgba(255,255,255,0.95);
+      color: #222;
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 16px;
+      text-align: center;
+      display: none;
+      min-width: 260px;
+    }
+
+    #startBtn {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      z-index: 999;
+      padding: 12px 24px;
+      font-size: 16px;
+      border: none;
+      border-radius: 999px;
+      background: #2d7ff9;
+      color: white;
+    }
+  </style>
 </head>
 
 <body>
+  <div id="infoBox"></div>
+  <button id="startBtn">体験スタート</button>
+
   <a-scene
     mindar-image="imageTargetSrc: ./targets.mind;"
     vr-mode-ui="enabled: false"
@@ -19,14 +59,51 @@
 
     <a-entity mindar-image-target="targetIndex: 0">
       <a-box
-        position="0 0 0"
+        id="carBox"
+        position="-0.3 0 0"
         rotation="0 0 0"
         scale="0.6 0.2 0.35"
-        color="#4CC3D9"
-        animation="property: position; from: -0.3 0 0; to: 0.3 0 0; dur: 2000; dir: alternate; loop: true">
+        color="#4CC3D9">
       </a-box>
     </a-entity>
 
   </a-scene>
+
+  <script>
+    const infoBox = document.getElementById("infoBox");
+    const startBtn = document.getElementById("startBtn");
+    const carBox = document.getElementById("carBox");
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function showMessage(text) {
+      infoBox.innerHTML = text;
+      infoBox.style.display = "block";
+    }
+
+    async function startExperience() {
+      startBtn.disabled = true;
+      startBtn.style.display = "none";
+
+      showMessage("① 予約番号をお伝えください");
+      await sleep(2000);
+
+      showMessage("② 料金は前払いになります");
+      await sleep(2000);
+
+      showMessage("③ 目的地へ向かいます");
+      carBox.setAttribute(
+        "animation",
+        "property: position; from: -0.3 0 0; to: 0.3 0 0; dur: 3000; easing: linear"
+      );
+      await sleep(3200);
+
+      showMessage("目的地に到着");
+    }
+
+    startBtn.addEventListener("click", startExperience);
+  </script>
 </body>
 </html>
