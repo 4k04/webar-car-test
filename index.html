@@ -387,41 +387,19 @@
     let gyroReferenceReady = false;
 
     /**
-     * 車両を固定する画面上の位置です。
-     *
-     * Xは左端が0、中央が0.5、右端が1です。
-     * Yは上端が0、中央が0.5、下端が1です。
+     * 車両がフロント方向へ進む距離と時間です。
+     * この車両モデルでは、ローカル+X方向をフロントとして扱います。
      */
-    const SCREEN_X_RATIO = 0.50;
-    const SCREEN_Y_RATIO = 0.58;
-
-    /**
-     * カメラから固定車両までの仮想的な距離です。
-     * 小さくすると大きく、数値を大きくすると小さく見えます。
-     */
-    const SCREEN_ANCHOR_DEPTH = 2.0;
-
-    /**
-     * 画面固定後の3D表示全体の拡大率です。
-     * 1.5で1.5倍、2.0で2倍になります。
-     */
-    const DISPLAY_SCALE_MULTIPLIER = 1.7;
-
-    /**
-     * GLBモデルのフロント方向です。
-     *
-     * 現在はローカル+Xを車両前方として扱います。
-     * 後ろ向きに走る場合は(-1, 0, 0)へ変更してください。
-     */
+    const CAR_MOVE_DISTANCE = 0.25;
+    const CAR_MOVE_DURATION = 3000;
     const CAR_FRONT_LOCAL_AXIS =
       new THREE.Vector3(1, 0, 0);
 
     /**
-     * 出発時の移動距離です。
-     * 0.75なら、現在の奥行きにおける画面幅の約75％分です。
+     * 画面固定後の3D表示全体の拡大率です。
+     * 2.0ではなく1.7倍で表示します。
      */
-    const DEPARTURE_SCREEN_WIDTH_RATIO = 0.75;
-    const CAR_MOVE_DURATION = 3000;
+    const DISPLAY_SCALE_MULTIPLIER = 1.7;
 
     /**
      * ジャイロ回転の追従率です。
@@ -729,62 +707,9 @@
     }
 
     /**
-     * 0～1で指定した画面座標を、
-     * カメラ前方の3D座標へ変換します。
-     */
-    function getFixedScreenPosition() {
-      const camera =
-        cameraEl.getObject3D("camera");
-
-      if (!camera) {
-        return new THREE.Vector3(
-          0,
-          0,
-          -SCREEN_ANCHOR_DEPTH
-        );
-      }
-
-      const depth =
-        SCREEN_ANCHOR_DEPTH;
-
-      const verticalFov =
-        THREE.MathUtils.degToRad(
-          camera.fov
-        );
-
-      const visibleHeight =
-        2 *
-        Math.tan(verticalFov / 2) *
-        depth;
-
-      const aspect =
-        camera.aspect ||
-        window.innerWidth /
-          window.innerHeight;
-
-      const visibleWidth =
-        visibleHeight * aspect;
-
-      const ndcX =
-        SCREEN_X_RATIO * 2 - 1;
-
-      const ndcY =
-        1 - SCREEN_Y_RATIO * 2;
-
-      return new THREE.Vector3(
-        ndcX * visibleWidth / 2,
-        ndcY * visibleHeight / 2,
-        -depth
-      );
-    }
-
-    /**
-     * 認識中に表示されている同じ車両を、
+     * 認識画像上にある車両の現在の
+     * ワールド位置・回転・大きさを取得し、
      * カメラ配下の固定アンカーへ移します。
-     *
-     * 別モデルへの切替やDOMのappendChildは行いません。
-     * 以前消えなかった構造を維持したまま、
-     * 表示位置だけを画面座標で固定します。
      */
     function lockCarToScreen() {
       if (screenLocked) {
@@ -808,6 +733,9 @@
       cameraEl.object3D.updateMatrixWorld(true);
       carRoot.object3D.updateMatrixWorld(true);
 
+      const worldPosition =
+        new THREE.Vector3();
+
       const worldQuaternion =
         new THREE.Quaternion();
 
@@ -817,9 +745,10 @@
       const cameraWorldQuaternion =
         new THREE.Quaternion();
 
-      /**
-       * 認識中に実際に見えている回転と大きさを保存します。
-       */
+      carRoot.object3D.getWorldPosition(
+        worldPosition
+      );
+
       carRoot.object3D.getWorldQuaternion(
         worldQuaternion
       );
@@ -833,6 +762,25 @@
       );
 
       /**
+       * 車両の現在位置を、
+       * カメラのローカル座標へ変換します。
+       */
+      const cameraLocalPosition =
+        worldPosition.clone();
+
+      cameraEl.object3D.worldToLocal(
+        cameraLocalPosition
+      );
+
+      /**
+       * 万一カメラの後ろ側として計算された場合は、
+       * 前方2m相当の位置へ補正します。
+       */
+      if (cameraLocalPosition.z >= -0.05) {
+        cameraLocalPosition.z = -2;
+      }
+
+      /**
        * 車両のワールド回転を、
        * カメラ基準のローカル回転へ変換します。
        */
@@ -842,12 +790,8 @@
           .invert()
           .multiply(worldQuaternion);
 
-      /**
-       * 認識した位置は使わず、
-       * 指定したスマホ画面座標へ固定します。
-       */
       screenAnchor.object3D.position.copy(
-        getFixedScreenPosition()
+        cameraLocalPosition
       );
 
       screenAnchor.object3D.quaternion.identity();
@@ -860,10 +804,8 @@
       );
 
       /**
-       * 重要:
-       * HTMLの親子関係は変更しません。
-       * 読み込み済みの同じobject3Dだけを
-       * gyroPivotの子へ移します。
+       * DOM上ではtargetの子のままですが、
+       * Three.js上ではgyroPivotの子へ移します。
        */
       gyroPivot.object3D.add(
         carRoot.object3D
@@ -875,15 +817,6 @@
       );
       carRoot.object3D.scale.copy(
         worldScale
-      );
-
-      carRoot.object3D.visible = true;
-      carModel.object3D.visible = true;
-
-      carRoot.object3D.traverse(
-        (object) => {
-          object.visible = true;
-        }
       );
 
       lockedAnchorPosition.copy(
@@ -906,8 +839,6 @@
 
       screenLocked = true;
       calibrateGyroscope();
-
-      sceneEl.object3D.updateMatrixWorld(true);
 
       return true;
     }
@@ -974,20 +905,6 @@
           arSystem.pause(true);
           trackingPaused = true;
 
-          /**
-           * pause直後にMindAR側の表示更新が入っても、
-           * 固定側の車両を表示状態に保ちます。
-           */
-          screenAnchor.object3D.visible = true;
-          carRoot.object3D.visible = true;
-          carModel.object3D.visible = true;
-
-          window.requestAnimationFrame(() => {
-            screenAnchor.object3D.visible = true;
-            carRoot.object3D.visible = true;
-            carModel.object3D.visible = true;
-          });
-
           statusBox.textContent =
             gyroPermissionGranted
               ? "表示位置を固定しました。スマートフォンを傾けて見回せます"
@@ -1019,127 +936,43 @@
     }
 
     /**
-     * screenAnchorがある奥行きで、
-     * カメラに映る横幅を計算します。
+     * 車両自身のフロント方向へ進ませ、
+     * 指定距離を進んだ位置で停止させます。
+     *
+     * 固定の画面左方向ではなく、carRootの回転を使って
+     * ローカル+X方向を現在の表示座標へ変換します。
      */
-    function getVisibleWidthAtAnchorDepth() {
-      const camera =
-        cameraEl.getObject3D("camera");
-
-      if (!camera) {
-        return 1;
-      }
-
-      const depth =
-        Math.max(
-          0.1,
-          Math.abs(
-            screenAnchor.object3D.position.z
-          )
-        );
-
-      const verticalFov =
-        THREE.MathUtils.degToRad(
-          camera.fov
-        );
-
-      const visibleHeight =
-        2 *
-        Math.tan(verticalFov / 2) *
-        depth;
-
-      const aspect =
-        camera.aspect ||
-        window.innerWidth /
-          window.innerHeight;
-
-      return visibleHeight * aspect;
-    }
-
-    /**
-     * 出発時点の車両フロント方向を、
-     * カメラから見た画面上の方向へ変換します。
-     */
-    function getVehicleFrontScreenDirection() {
-      sceneEl.object3D.updateMatrixWorld(true);
-      cameraEl.object3D.updateMatrixWorld(true);
-      carRoot.object3D.updateMatrixWorld(true);
-
-      const carWorldQuaternion =
-        new THREE.Quaternion();
-
-      const cameraWorldQuaternion =
-        new THREE.Quaternion();
-
-      carRoot.object3D.getWorldQuaternion(
-        carWorldQuaternion
-      );
-
-      cameraEl.object3D.getWorldQuaternion(
-        cameraWorldQuaternion
-      );
-
-      const cameraLocalDirection =
-        CAR_FRONT_LOCAL_AXIS
-          .clone()
-          .applyQuaternion(
-            carWorldQuaternion
-          )
-          .applyQuaternion(
-            cameraWorldQuaternion
-              .clone()
-              .invert()
+    function moveCarForward() {
+      return new Promise((resolve) => {
+        if (!carRoot.object3D) {
+          console.error(
+            "車両の3Dオブジェクトを取得できません。"
           );
 
-      /**
-       * 画面上の移動にするため、
-       * 奥行き成分は使用しません。
-       */
-      cameraLocalDirection.z = 0;
+          resolve();
+          return;
+        }
 
-      /**
-       * フロントがカメラ正面を向いていて、
-       * 画面上の方向を求められない場合は左へ出発します。
-       */
-      if (
-        cameraLocalDirection.lengthSq() <
-        0.000001
-      ) {
-        cameraLocalDirection.set(-1, 0, 0);
-      }
-
-      return cameraLocalDirection.normalize();
-    }
-
-    /**
-     * 車体・扉を含む固定表示全体を、
-     * 車両のフロント方向へ移動させます。
-     */
-    function moveAllContentForward() {
-      return new Promise((resolve) => {
         const startPosition =
-          screenAnchor.object3D.position.clone();
+          carRoot.object3D.position.clone();
 
-        const visibleWidth =
-          getVisibleWidthAtAnchorDepth();
-
-        const moveDistance =
-          visibleWidth *
-          DEPARTURE_SCREEN_WIDTH_RATIO;
-
-        const departureDirection =
-          getVehicleFrontScreenDirection();
+        const frontDirection =
+          CAR_FRONT_LOCAL_AXIS
+            .clone()
+            .applyQuaternion(
+              carRoot.object3D.quaternion
+            )
+            .normalize();
 
         const endPosition =
           startPosition
             .clone()
             .addScaledVector(
-              departureDirection,
-              moveDistance
+              frontDirection,
+              CAR_MOVE_DISTANCE
             );
 
-        const startTime =
-          performance.now();
+        const startTime = performance.now();
 
         const animate = (currentTime) => {
           const elapsed =
@@ -1150,6 +983,9 @@
             1
           );
 
+          /**
+           * 発進時と停止時を滑らかにします。
+           */
           const eased =
             progress < 0.5
               ? 2 * progress * progress
@@ -1159,12 +995,11 @@
                   2
                 ) / 2;
 
-          screenAnchor.object3D.position
-            .lerpVectors(
-              startPosition,
-              endPosition,
-              eased
-            );
+          carRoot.object3D.position.lerpVectors(
+            startPosition,
+            endPosition,
+            eased
+          );
 
           if (progress < 1) {
             window.requestAnimationFrame(
@@ -1174,7 +1009,7 @@
             return;
           }
 
-          screenAnchor.object3D.position.copy(
+          carRoot.object3D.position.copy(
             endPosition
           );
 
@@ -1312,10 +1147,10 @@
       await sleep(800);
 
       /**
-       * 車体だけでなく、screenAnchor配下の
-       * 3D表示全体を車両のフロント方向へ動かします。
+       * 扉が閉じ終わった後、
+       * 車両自身のフロント方向へ進んで停止します。
        */
-      await moveAllContentForward();
+      await moveCarForward();
 
       showMessage(
         "目的地に到着しました"
@@ -1444,19 +1279,7 @@
 
     window.addEventListener(
       "resize",
-      () => {
-        if (screenLocked) {
-          screenAnchor.object3D.position.copy(
-            getFixedScreenPosition()
-          );
-
-          lockedAnchorPosition.copy(
-            screenAnchor.object3D.position
-          );
-        } else {
-          adjustCarScale();
-        }
-      }
+      adjustCarScale
     );
 
     window.addEventListener(
@@ -1465,14 +1288,6 @@
         window.setTimeout(
           () => {
             if (screenLocked) {
-              screenAnchor.object3D.position.copy(
-                getFixedScreenPosition()
-              );
-
-              lockedAnchorPosition.copy(
-                screenAnchor.object3D.position
-              );
-
               calibrateGyroscope();
             } else {
               adjustCarScale();
