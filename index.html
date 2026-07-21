@@ -936,17 +936,77 @@
     }
 
     /**
-     * 車両自身のフロント方向へ進ませ、
-     * 指定距離を進んだ位置で停止させます。
+     * 現在画面に表示されている車両のフロント方向を、
+     * screenAnchorのローカルXY座標へ変換します。
      *
-     * 固定の画面左方向ではなく、carRootの回転を使って
-     * ローカル+X方向を現在の表示座標へ変換します。
+     * Z方向は画面の奥行きなので除外し、
+     * スマートフォン画面上で見える進行方向だけを使います。
+     */
+    function getCarFrontDirectionOnScreen() {
+      sceneEl.object3D.updateMatrixWorld(true);
+      screenAnchor.object3D.updateMatrixWorld(true);
+      carRoot.object3D.updateMatrixWorld(true);
+
+      /**
+       * 車両原点と、車両ローカル+X方向の点を
+       * ワールド座標へ変換します。
+       */
+      const carOriginWorld =
+        carRoot.object3D.localToWorld(
+          new THREE.Vector3(0, 0, 0)
+        );
+
+      const carFrontWorld =
+        carRoot.object3D.localToWorld(
+          CAR_FRONT_LOCAL_AXIS.clone()
+        );
+
+      /**
+       * 2点をscreenAnchorのローカル座標へ変換します。
+       * screenAnchorはカメラ配下なので、ここでのX・Yが
+       * 画面上の左右・上下方向に相当します。
+       */
+      const carOriginOnScreen =
+        screenAnchor.object3D.worldToLocal(
+          carOriginWorld.clone()
+        );
+
+      const carFrontOnScreen =
+        screenAnchor.object3D.worldToLocal(
+          carFrontWorld.clone()
+        );
+
+      const screenDirection =
+        carFrontOnScreen.sub(carOriginOnScreen);
+
+      /**
+       * 奥行き方向は移動に使わず、画面平面へ投影します。
+       */
+      screenDirection.z = 0;
+
+      /**
+       * 車両がほぼ正面を向き、画面上の方向を算出できない場合は、
+       * これまでの表示向きに合わせて画面左を予備方向とします。
+       */
+      if (screenDirection.lengthSq() < 0.000001) {
+        screenDirection.set(-1, 0, 0);
+      }
+
+      return screenDirection.normalize();
+    }
+
+    /**
+     * 車両のフロント方向を画面座標へ投影し、
+     * screenAnchor配下の車体・扉をまとめて進ませます。
      */
     function moveCarForward() {
       return new Promise((resolve) => {
-        if (!carRoot.object3D) {
+        if (
+          !screenAnchor.object3D ||
+          !carRoot.object3D
+        ) {
           console.error(
-            "車両の3Dオブジェクトを取得できません。"
+            "車両移動に必要な3Dオブジェクトを取得できません。"
           );
 
           resolve();
@@ -954,21 +1014,16 @@
         }
 
         const startPosition =
-          carRoot.object3D.position.clone();
+          screenAnchor.object3D.position.clone();
 
-        const frontDirection =
-          CAR_FRONT_LOCAL_AXIS
-            .clone()
-            .applyQuaternion(
-              carRoot.object3D.quaternion
-            )
-            .normalize();
+        const screenDirection =
+          getCarFrontDirectionOnScreen();
 
         const endPosition =
           startPosition
             .clone()
             .addScaledVector(
-              frontDirection,
+              screenDirection,
               CAR_MOVE_DISTANCE
             );
 
@@ -995,7 +1050,7 @@
                   2
                 ) / 2;
 
-          carRoot.object3D.position.lerpVectors(
+          screenAnchor.object3D.position.lerpVectors(
             startPosition,
             endPosition,
             eased
@@ -1009,7 +1064,7 @@
             return;
           }
 
-          carRoot.object3D.position.copy(
+          screenAnchor.object3D.position.copy(
             endPosition
           );
 
