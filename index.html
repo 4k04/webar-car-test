@@ -291,7 +291,13 @@
         <!--
           スマートフォンの向きに応じた回転だけを担当します。
         -->
-        <a-entity id="gyroPivot"></a-entity>
+        <!--
+          画面固定位置とは別に、画面上の移動だけを担当します。
+          このエンティティのX・Yはスマートフォン画面基準です。
+        -->
+        <a-entity id="screenMovePivot">
+          <a-entity id="gyroPivot"></a-entity>
+        </a-entity>
       </a-entity>
     </a-camera>
 
@@ -364,6 +370,9 @@
     const screenAnchor =
       document.getElementById("screenAnchor");
 
+    const screenMovePivot =
+      document.getElementById("screenMovePivot");
+
     const gyroPivot =
       document.getElementById("gyroPivot");
 
@@ -387,13 +396,13 @@
     let gyroReferenceReady = false;
 
     /**
-     * 車両がフロント方向へ進む距離と時間です。
-     * この車両モデルでは、ローカル+X方向をフロントとして扱います。
+     * スマートフォン画面上での進行方向と移動時間です。
+     * NDC座標は画面左端が-1、右端が+1です。
+     * -0.85は画面幅のおよそ42.5％ぶん左へ進む設定です。
+     * 現在の初期表示では、画面左側が車両のフロント方向です。
      */
-    const CAR_MOVE_DISTANCE = 0.25;
+    const SCREEN_FORWARD_NDC_X = -0.85;
     const CAR_MOVE_DURATION = 3000;
-    const CAR_FRONT_LOCAL_AXIS =
-      new THREE.Vector3(1, 0, 0);
 
     /**
      * 画面固定後の3D表示全体の拡大率です。
@@ -719,6 +728,7 @@
       if (
         !cameraEl.object3D ||
         !screenAnchor.object3D ||
+        !screenMovePivot.object3D ||
         !gyroPivot.object3D ||
         !carRoot.object3D
       ) {
@@ -796,6 +806,14 @@
 
       screenAnchor.object3D.quaternion.identity();
       screenAnchor.object3D.scale.set(1, 1, 1);
+
+      /**
+       * 固定位置と画面上の移動を分離します。
+       * screenAnchorは固定したまま、screenMovePivotだけを動かします。
+       */
+      screenMovePivot.object3D.position.set(0, 0, 0);
+      screenMovePivot.object3D.quaternion.identity();
+      screenMovePivot.object3D.scale.set(1, 1, 1);
 
       gyroPivot.object3D.position.set(0, 0, 0);
       gyroPivot.object3D.quaternion.identity();
@@ -936,98 +954,78 @@
     }
 
     /**
-     * 現在画面に表示されている車両のフロント方向を、
-     * screenAnchorのローカルXY座標へ変換します。
+     * 固定済みの車両を、スマートフォン画面の座標上で
+     * 左方向（現在の車両のフロント側）へ移動させます。
      *
-     * Z方向は画面の奥行きなので除外し、
-     * スマートフォン画面上で見える進行方向だけを使います。
+     * 車両の3Dローカル軸は使いません。
+     * 現在位置をカメラのNDC座標へ投影し、
+     * 画面上のX座標だけを変更してから3D座標へ戻します。
      */
-    function getCarFrontDirectionOnScreen() {
-      sceneEl.object3D.updateMatrixWorld(true);
-      screenAnchor.object3D.updateMatrixWorld(true);
-      carRoot.object3D.updateMatrixWorld(true);
-
-      /**
-       * 車両原点と、車両ローカル+X方向の点を
-       * ワールド座標へ変換します。
-       */
-      const carOriginWorld =
-        carRoot.object3D.localToWorld(
-          new THREE.Vector3(0, 0, 0)
-        );
-
-      const carFrontWorld =
-        carRoot.object3D.localToWorld(
-          CAR_FRONT_LOCAL_AXIS.clone()
-        );
-
-      /**
-       * 2点をscreenAnchorのローカル座標へ変換します。
-       * screenAnchorはカメラ配下なので、ここでのX・Yが
-       * 画面上の左右・上下方向に相当します。
-       */
-      const carOriginOnScreen =
-        screenAnchor.object3D.worldToLocal(
-          carOriginWorld.clone()
-        );
-
-      const carFrontOnScreen =
-        screenAnchor.object3D.worldToLocal(
-          carFrontWorld.clone()
-        );
-
-      const screenDirection =
-        carFrontOnScreen.sub(carOriginOnScreen);
-
-      /**
-       * 奥行き方向は移動に使わず、画面平面へ投影します。
-       */
-      screenDirection.z = 0;
-
-      /**
-       * 車両がほぼ正面を向き、画面上の方向を算出できない場合は、
-       * これまでの表示向きに合わせて画面左を予備方向とします。
-       */
-      if (screenDirection.lengthSq() < 0.000001) {
-        screenDirection.set(-1, 0, 0);
-      }
-
-      return screenDirection.normalize();
-    }
-
-    /**
-     * 車両のフロント方向を画面座標へ投影し、
-     * screenAnchor配下の車体・扉をまとめて進ませます。
-     */
-    function moveCarForward() {
+    function moveCarForwardOnScreen() {
       return new Promise((resolve) => {
+        const cameraObject =
+          cameraEl.getObject3D("camera");
+
         if (
+          !cameraObject ||
           !screenAnchor.object3D ||
-          !carRoot.object3D
+          !screenMovePivot.object3D
         ) {
           console.error(
-            "車両移動に必要な3Dオブジェクトを取得できません。"
+            "画面座標移動に必要な3Dオブジェクトを取得できません。"
           );
 
           resolve();
           return;
         }
 
-        const startPosition =
-          screenAnchor.object3D.position.clone();
+        sceneEl.object3D.updateMatrixWorld(true);
+        cameraObject.updateMatrixWorld(true);
+        screenAnchor.object3D.updateMatrixWorld(true);
+        screenMovePivot.object3D.updateMatrixWorld(true);
 
-        const screenDirection =
-          getCarFrontDirectionOnScreen();
+        const startPosition =
+          screenMovePivot.object3D.position.clone();
+
+        /**
+         * 移動用ピボットの現在位置をワールド座標で取得し、
+         * スマートフォン画面上のNDC座標へ変換します。
+         */
+        const startWorldPosition =
+          new THREE.Vector3();
+
+        screenMovePivot.object3D.getWorldPosition(
+          startWorldPosition
+        );
+
+        const startNdc =
+          startWorldPosition
+            .clone()
+            .project(cameraObject);
+
+        /**
+         * 奥行きと高さは変えず、画面のX方向だけを動かします。
+         */
+        const endNdc = startNdc.clone();
+        endNdc.x += SCREEN_FORWARD_NDC_X;
+
+        /**
+         * 変更後の画面座標を3Dのワールド座標へ戻し、
+         * screenMovePivotの親であるscreenAnchorの
+         * ローカル座標へ変換します。
+         */
+        const endWorldPosition =
+          endNdc.unproject(cameraObject);
 
         const endPosition =
-          startPosition
-            .clone()
-            .addScaledVector(
-              screenDirection,
-              CAR_MOVE_DISTANCE
-            );
+          screenAnchor.object3D.worldToLocal(
+            endWorldPosition.clone()
+          );
 
         const startTime = performance.now();
+
+        statusBox.textContent =
+          "車両がフロント方向へ進んでいます";
 
         const animate = (currentTime) => {
           const elapsed =
@@ -1050,30 +1048,34 @@
                   2
                 ) / 2;
 
-          screenAnchor.object3D.position.lerpVectors(
+          screenMovePivot.object3D.position.lerpVectors(
             startPosition,
             endPosition,
             eased
           );
 
-          if (progress < 1) {
-            window.requestAnimationFrame(
-              animate
-            );
+          /**
+           * A-Frame側にも行列更新を明示し、
+           * 次の描画フレームへ確実に反映します。
+           */
+          screenMovePivot.object3D.updateMatrix();
+          screenMovePivot.object3D.matrixWorldNeedsUpdate = true;
 
+          if (progress < 1) {
+            window.requestAnimationFrame(animate);
             return;
           }
 
-          screenAnchor.object3D.position.copy(
+          screenMovePivot.object3D.position.copy(
             endPosition
           );
+          screenMovePivot.object3D.updateMatrix();
+          screenMovePivot.object3D.matrixWorldNeedsUpdate = true;
 
           resolve();
         };
 
-        window.requestAnimationFrame(
-          animate
-        );
+        window.requestAnimationFrame(animate);
       });
     }
 
@@ -1106,6 +1108,15 @@
         screenAnchor.object3D.position.copy(
           lockedAnchorPosition
         );
+
+        /**
+         * 画面上の移動量をゼロへ戻します。
+         */
+        screenMovePivot.object3D.position.set(0, 0, 0);
+        screenMovePivot.object3D.quaternion.identity();
+        screenMovePivot.object3D.scale.set(1, 1, 1);
+        screenMovePivot.object3D.updateMatrix();
+        screenMovePivot.object3D.matrixWorldNeedsUpdate = true;
 
         carRoot.object3D.position.set(0, 0, 0);
         carRoot.object3D.quaternion.copy(
@@ -1203,9 +1214,9 @@
 
       /**
        * 扉が閉じ終わった後、
-       * 車両自身のフロント方向へ進んで停止します。
+       * スマートフォン画面上のフロント方向へ進んで停止します。
        */
-      await moveCarForward();
+      await moveCarForwardOnScreen();
 
       showMessage(
         "目的地に到着しました"
