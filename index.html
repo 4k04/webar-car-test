@@ -351,9 +351,14 @@
     const target =
       document.getElementById("target");
 
+    const sceneEl =
+      document.querySelector("a-scene");
+
+    let arSystem = null;
     let modelReady = false;
     let targetVisible = false;
     let experienceRunning = false;
+    let trackingPaused = false;
 
     /**
      * 車両の開始位置と終了位置です。
@@ -361,7 +366,12 @@
      * Xのプラス側からマイナス側へ移動します。
      */
     const CAR_START_POSITION = "0.3 0 0.12";
-    const CAR_END_POSITION = "-0.3 0 0.12";
+
+    /**
+     * 元の-0.3から-0.1へ変更し、
+     * 移動距離を0.6から0.4へ短縮しています。
+     */
+    const CAR_END_POSITION = "-0.1 0 0.12";
 
     function sleep(ms) {
       return new Promise((resolve) => {
@@ -372,6 +382,41 @@
     function showMessage(text) {
       infoBox.textContent = text;
       infoBox.style.display = "block";
+    }
+
+    /**
+     * 読み込み状態と認識状態に合わせて、
+     * スタートボタンを更新します。
+     */
+    function updateStartButton() {
+      if (experienceRunning) {
+        startBtn.disabled = true;
+        return;
+      }
+
+      if (!modelReady) {
+        startBtn.disabled = true;
+        startBtn.textContent = "読み込み中";
+        return;
+      }
+
+      if (!arSystem) {
+        startBtn.disabled = true;
+        startBtn.textContent = "AR準備中";
+        return;
+      }
+
+      if (!targetVisible && !trackingPaused) {
+        startBtn.disabled = true;
+        startBtn.textContent =
+          "認識画像を映してください";
+        return;
+      }
+
+      startBtn.disabled = false;
+      startBtn.textContent = trackingPaused
+        ? "もう一度体験"
+        : "体験スタート";
     }
 
     /**
@@ -449,14 +494,59 @@
     }
 
     /**
+     * 車両と扉を開始状態へ戻します。
+     */
+    function resetExperienceObjects() {
+      carRoot.removeAttribute("animation__move");
+
+      carRoot.setAttribute(
+        "position",
+        CAR_START_POSITION
+      );
+
+      const doorComponent =
+        carModel.components["sliding-door"];
+
+      if (
+        doorComponent &&
+        doorComponent.doorObject
+      ) {
+        doorComponent.isMoving = false;
+
+        doorComponent.doorObject.position.copy(
+          doorComponent.closedPosition
+        );
+      }
+    }
+
+    /**
      * 体験の一連の流れです。
      */
     async function startExperience() {
-      if (!modelReady || experienceRunning) {
+      if (
+        !modelReady ||
+        !arSystem ||
+        experienceRunning ||
+        (!targetVisible && !trackingPaused)
+      ) {
         return;
       }
 
       experienceRunning = true;
+
+      /**
+       * 最初の開始時だけ画像追跡を停止し、
+       * 最後に取得した位置と回転で固定します。
+       *
+       * trueを指定することで、
+       * カメラ映像は表示したままにします。
+       */
+      if (!trackingPaused) {
+        arSystem.pause(true);
+        trackingPaused = true;
+      }
+
+      resetExperienceObjects();
 
       startBtn.disabled = true;
       startBtn.style.display = "none";
@@ -505,6 +595,11 @@
       showMessage(
         "ご乗車ありがとうございました"
       );
+
+      experienceRunning = false;
+
+      startBtn.style.display = "block";
+      updateStartButton();
     }
 
     /**
@@ -518,10 +613,8 @@
         statusBox.textContent =
           "認識画像にスマートフォンをかざしてください";
 
-        startBtn.disabled = false;
-        startBtn.textContent = "体験スタート";
-
         adjustCarScale();
+        updateStartButton();
       }
     );
 
@@ -535,6 +628,8 @@
 
         statusBox.textContent =
           "認識画像を検出しました";
+
+        updateStartButton();
       }
     );
 
@@ -548,6 +643,8 @@
 
         statusBox.textContent =
           "もう一度、認識画像にかざしてください";
+
+        updateStartButton();
       }
     );
 
@@ -562,6 +659,23 @@
         );
       }
     );
+
+    function initializeArSystem() {
+      arSystem =
+        sceneEl.systems["mindar-image-system"];
+
+      updateStartButton();
+    }
+
+    if (sceneEl.hasLoaded) {
+      initializeArSystem();
+    } else {
+      sceneEl.addEventListener(
+        "loaded",
+        initializeArSystem,
+        { once: true }
+      );
+    }
 
     startBtn.addEventListener(
       "click",
@@ -584,6 +698,7 @@
     );
 
     adjustCarScale();
+    updateStartButton();
   </script>
 </body>
 </html>
