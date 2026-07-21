@@ -1,14 +1,14 @@
 <!doctype html>
-
 <html lang="ja">
 <head>
   <meta charset="utf-8">
 
   <title>WebAR Car Test</title>
 
-<metaname="viewport"content="width=device-width, initial-scale=1, viewport-fit=cover"
-
-
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  >
 
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
 
@@ -88,3 +88,502 @@
       text-align: center;
     }
   </style>
+
+  <script>
+    /**
+     * GLB内の扉オブジェクトをスライドさせます。
+     *
+     * Blender側の扉オブジェクト名は
+     * Slide_Door
+     * とします。
+     */
+    AFRAME.registerComponent("sliding-door", {
+      schema: {
+        doorName: {
+          type: "string",
+          default: "Slide_Door"
+        },
+
+        /**
+         * 扉を開いたときの移動距離です。
+         * 前回の-0.28から、少しだけ小さい-0.26へ変更。
+         */
+        openOffset: {
+          type: "vec3",
+          default: {
+            x: -0.26,
+            y: 0,
+            z: 0
+          }
+        },
+
+        duration: {
+          type: "number",
+          default: 1200
+        }
+      },
+
+      init: function () {
+        this.doorObject = null;
+        this.closedPosition = new THREE.Vector3();
+        this.openPosition = new THREE.Vector3();
+        this.isMoving = false;
+
+        this.el.addEventListener("model-loaded", () => {
+          const model = this.el.getObject3D("mesh");
+
+          if (!model) {
+            console.error("GLBモデルを取得できませんでした。");
+            return;
+          }
+
+          this.doorObject = model.getObjectByName(
+            this.data.doorName
+          );
+
+          if (!this.doorObject) {
+            console.warn(
+              `扉オブジェクト「${this.data.doorName}」が見つかりません。`
+            );
+
+            this.el.emit("door-not-found");
+            return;
+          }
+
+          this.closedPosition.copy(
+            this.doorObject.position
+          );
+
+          this.openPosition
+            .copy(this.closedPosition)
+            .add(
+              new THREE.Vector3(
+                this.data.openOffset.x,
+                this.data.openOffset.y,
+                this.data.openOffset.z
+              )
+            );
+
+          this.el.emit("door-ready");
+        });
+      },
+
+      moveDoor: function (open) {
+        if (!this.doorObject || this.isMoving) {
+          return Promise.resolve(false);
+        }
+
+        this.isMoving = true;
+
+        const startPosition =
+          this.doorObject.position.clone();
+
+        const endPosition = open
+          ? this.openPosition.clone()
+          : this.closedPosition.clone();
+
+        const startTime = performance.now();
+        const duration = this.data.duration;
+
+        return new Promise((resolve) => {
+          const animate = (currentTime) => {
+            const elapsed = currentTime - startTime;
+
+            const progress = Math.min(
+              elapsed / duration,
+              1
+            );
+
+            /**
+             * 開始時と停止時を少し滑らかにします。
+             */
+            const eased =
+              progress < 0.5
+                ? 2 * progress * progress
+                : 1 -
+                  Math.pow(-2 * progress + 2, 2) / 2;
+
+            this.doorObject.position.lerpVectors(
+              startPosition,
+              endPosition,
+              eased
+            );
+
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+              return;
+            }
+
+            this.doorObject.position.copy(
+              endPosition
+            );
+
+            this.isMoving = false;
+            resolve(true);
+          };
+
+          requestAnimationFrame(animate);
+        });
+      }
+    });
+  </script>
+</head>
+
+<body>
+  <div id="statusBox">
+    車両モデルを読み込んでいます
+  </div>
+
+  <div id="infoBox"></div>
+
+  <button
+    id="startBtn"
+    type="button"
+    disabled
+  >
+    読み込み中
+  </button>
+
+  <a-scene
+    mindar-image="
+      imageTargetSrc: ./targets.mind;
+      autoStart: true;
+      filterMinCF: 0.0001;
+      filterBeta: 10;
+      warmupTolerance: 5;
+      missTolerance: 10;
+    "
+    renderer="
+      colorManagement: true;
+      physicallyCorrectLights: true;
+      antialias: true;
+    "
+    vr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false"
+    loading-screen="enabled: false"
+  >
+
+    <!--
+      GLBが約30MBあるため、
+     読み込み猶予を長めにしています。
+    -->
+    <a-assets timeout="120000">
+      <a-asset-item
+        id="carAsset"
+        src="./assets/car_test.glb"
+      >
+      </a-asset-item>
+    </a-assets>
+
+    <a-camera
+      position="0 0 0"
+      look-controls="enabled: false"
+    >
+    </a-camera>
+
+    <!-- 車体全体を明るくする光 -->
+    <a-light
+      type="ambient"
+      intensity="1.2"
+    >
+    </a-light>
+
+    <!-- 太陽光に近い方向性のある光 -->
+    <a-light
+      type="directional"
+      intensity="1.1"
+      position="1 3 2"
+    >
+    </a-light>
+
+    <a-entity
+      id="target"
+      mindar-image-target="targetIndex: 0"
+    >
+
+      <!--
+        rotation:
+        X -90度で車輪を下にして紙面上へ立たせます。
+        Z 180度で車両の頭を左へ向けます。
+
+        position:
+        Z 0.12で紙面から少し持ち上げています。
+      -->
+      <a-entity
+        id="carRoot"
+        position="0.3 0 0.12"
+        rotation="-90 0 180"
+        scale="0.20 0.20 0.20"
+      >
+
+        <a-gltf-model
+          id="carModel"
+          src="#carAsset"
+          sliding-door="
+            doorName: Slide_Door;
+            openOffset: -0.26 0 0;
+            duration: 1200;
+          "
+        >
+        </a-gltf-model>
+
+      </a-entity>
+    </a-entity>
+
+  </a-scene>
+
+  <script>
+    const infoBox =
+      document.getElementById("infoBox");
+
+    const statusBox =
+      document.getElementById("statusBox");
+
+    const startBtn =
+      document.getElementById("startBtn");
+
+    const carRoot =
+      document.getElementById("carRoot");
+
+    const carModel =
+      document.getElementById("carModel");
+
+    const target =
+      document.getElementById("target");
+
+    let modelReady = false;
+    let targetVisible = false;
+    let experienceRunning = false;
+
+    /**
+     * 車両の開始位置と終了位置です。
+     * 車両の頭が左向きなので、
+     * Xのプラス側からマイナス側へ移動します。
+     */
+    const CAR_START_POSITION = "0.3 0 0.12";
+    const CAR_END_POSITION = "-0.3 0 0.12";
+
+    function sleep(ms) {
+      return new Promise((resolve) => {
+        window.setTimeout(resolve, ms);
+      });
+    }
+
+    function showMessage(text) {
+      infoBox.textContent = text;
+      infoBox.style.display = "block";
+    }
+
+    /**
+     * 縦持ちは小さめ、
+     * 横持ちは少し大きめに表示します。
+     */
+    function adjustCarScale() {
+      const isPortrait =
+        window.innerHeight > window.innerWidth;
+
+      if (isPortrait) {
+        carRoot.setAttribute(
+          "scale",
+          "0.20 0.20 0.20"
+        );
+      } else {
+        carRoot.setAttribute(
+          "scale",
+          "0.28 0.28 0.28"
+        );
+      }
+    }
+
+    /**
+     * 車両を左方向へ移動させます。
+     */
+    function moveCar() {
+      return new Promise((resolve) => {
+        const onComplete = () => {
+          carRoot.removeEventListener(
+            "animationcomplete__move",
+            onComplete
+          );
+
+          resolve();
+        };
+
+        carRoot.addEventListener(
+          "animationcomplete__move",
+          onComplete
+        );
+
+        carRoot.setAttribute(
+          "animation__move",
+          {
+            property: "position",
+            from: CAR_START_POSITION,
+            to: CAR_END_POSITION,
+            dur: 3000,
+            easing: "linear"
+          }
+        );
+      });
+    }
+
+    /**
+     * 扉の開閉を実行します。
+     */
+    async function moveDoor(open) {
+      const doorComponent =
+        carModel.components["sliding-door"];
+
+      if (
+        !doorComponent ||
+        !doorComponent.doorObject
+      ) {
+        console.warn(
+          "扉が見つからないため、扉の動きを省略します。"
+        );
+
+        return;
+      }
+
+      await doorComponent.moveDoor(open);
+    }
+
+    /**
+     * 体験の一連の流れです。
+     */
+    async function startExperience() {
+      if (!modelReady || experienceRunning) {
+        return;
+      }
+
+      experienceRunning = true;
+
+      startBtn.disabled = true;
+      startBtn.style.display = "none";
+
+      /**
+       * 乗車前に扉を開きます。
+       */
+      await moveDoor(true);
+
+      showMessage(
+        "① 予約番号をお伝えください"
+      );
+
+      await sleep(2000);
+
+      showMessage(
+        "② 料金は前払いになります"
+      );
+
+      await sleep(2000);
+
+      /**
+       * 出発前に扉を閉じます。
+       */
+      await moveDoor(false);
+
+      showMessage(
+        "③ 目的地へ向かいます"
+      );
+
+      await sleep(800);
+
+      await moveCar();
+
+      showMessage(
+        "目的地に到着しました"
+      );
+
+      await sleep(1200);
+
+      /**
+       * 到着後に扉を開きます。
+       */
+      await moveDoor(true);
+
+      showMessage(
+        "ご乗車ありがとうございました"
+      );
+    }
+
+    /**
+     * GLBの読み込み完了時
+     */
+    carModel.addEventListener(
+      "model-loaded",
+      () => {
+        modelReady = true;
+
+        statusBox.textContent =
+          "認識画像にスマートフォンをかざしてください";
+
+        startBtn.disabled = false;
+        startBtn.textContent = "体験スタート";
+
+        adjustCarScale();
+      }
+    );
+
+    /**
+     * 認識画像を検出したとき
+     */
+    target.addEventListener(
+      "targetFound",
+      () => {
+        targetVisible = true;
+
+        statusBox.textContent =
+          "認識画像を検出しました";
+      }
+    );
+
+    /**
+     * 認識画像を見失ったとき
+     */
+    target.addEventListener(
+      "targetLost",
+      () => {
+        targetVisible = false;
+
+        statusBox.textContent =
+          "もう一度、認識画像にかざしてください";
+      }
+    );
+
+    /**
+     * 扉オブジェクトが見つからなかった場合
+     */
+    carModel.addEventListener(
+      "door-not-found",
+      () => {
+        console.warn(
+          "扉は動きませんが、車両表示と移動は実行できます。"
+        );
+      }
+    );
+
+    startBtn.addEventListener(
+      "click",
+      startExperience
+    );
+
+    window.addEventListener(
+      "resize",
+      adjustCarScale
+    );
+
+    window.addEventListener(
+      "orientationchange",
+      () => {
+        window.setTimeout(
+          adjustCarScale,
+          200
+        );
+      }
+    );
+
+    adjustCarScale();
+  </script>
+</body>
+</html>
