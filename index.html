@@ -310,22 +310,20 @@
       <a-entity
         id="carRoot"
         position="0.3 0 0.12"
-        rotation="90 0 180"
+        rotation="-90 0 180"
         scale="0.20 0.20 0.20"
       >
-
-        <a-gltf-model
-          id="carModel"
-          src="#carAsset"
-          sliding-door="
-            doorName: Slide_Door;
-            openOffset: -0.32 0 0;
-            duration: 1200;
-          "
-        >
-        </a-gltf-model>
-
-      </a-entity>
+      <a-gltf-model
+        id="carModel"
+        src="#carAsset"
+        sliding-door="
+          doorName: Slide_Door;
+          openOffset: -0.28 0 0;
+          duration: 1200;
+        "
+      >
+  </a-gltf-model>
+</a-entity>
     </a-entity>
 
   </a-scene>
