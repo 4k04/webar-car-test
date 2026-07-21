@@ -2,13 +2,16 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
+
   <title>WebAR Car Test</title>
+
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1, viewport-fit=cover"
   >
 
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
@@ -26,15 +29,19 @@
       bottom: 90px;
       transform: translateX(-50%);
       z-index: 999;
+
       box-sizing: border-box;
       width: min(90vw, 420px);
       padding: 12px 18px;
+
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.95);
+
       color: #222;
       font-size: 16px;
       line-height: 1.5;
       text-align: center;
+
       display: none;
     }
 
@@ -44,11 +51,15 @@
       bottom: 24px;
       transform: translateX(-50%);
       z-index: 999;
+
       padding: 12px 24px;
+
       border: none;
       border-radius: 999px;
+
       background: #2d7ff9;
       color: #fff;
+
       font-size: 16px;
       cursor: pointer;
     }
@@ -64,11 +75,14 @@
       left: 50%;
       transform: translateX(-50%);
       z-index: 999;
+
       box-sizing: border-box;
       width: min(90vw, 420px);
       padding: 8px 14px;
+
       border-radius: 10px;
       background: rgba(0, 0, 0, 0.65);
+
       color: #fff;
       font-size: 14px;
       text-align: center;
@@ -77,9 +91,9 @@
 
   <script>
     /**
-     * GLB内の扉オブジェクトを動かすコンポーネント
+     * GLB内の扉オブジェクトだけを動かすコンポーネント
      *
-     * Blender側のオブジェクト名が
+     * Blender側の扉オブジェクト名が
      * Slide_Door
      * になっている前提です。
      */
@@ -90,13 +104,19 @@
           default: "Slide_Door"
         },
 
-        /*
-         * 扉を開く方向と移動量です。
-         * 逆方向へ動く場合は、0.7を-0.7へ変更します。
+        /**
+         * 扉を開いたときの移動距離です。
+         *
+         * 現在はマイナス方向へ0.32移動します。
+         * 以前とは逆方向で、開く距離も短めです。
          */
         openOffset: {
           type: "vec3",
-          default: { x: 0.7, y: 0, z: 0 }
+          default: {
+            x: -0.32,
+            y: 0,
+            z: 0
+          }
         },
 
         duration: {
@@ -119,17 +139,22 @@
             return;
           }
 
-          this.doorObject = model.getObjectByName(this.data.doorName);
+          this.doorObject = model.getObjectByName(
+            this.data.doorName
+          );
 
           if (!this.doorObject) {
             console.warn(
               `扉オブジェクト「${this.data.doorName}」が見つかりません。`
             );
+
             this.el.emit("door-not-found");
             return;
           }
 
-          this.closedPosition.copy(this.doorObject.position);
+          this.closedPosition.copy(
+            this.doorObject.position
+          );
 
           this.openPosition
             .copy(this.closedPosition)
@@ -152,7 +177,9 @@
 
         this.isMoving = true;
 
-        const startPosition = this.doorObject.position.clone();
+        const startPosition =
+          this.doorObject.position.clone();
+
         const endPosition = open
           ? this.openPosition.clone()
           : this.closedPosition.clone();
@@ -163,15 +190,20 @@
         return new Promise((resolve) => {
           const animate = (currentTime) => {
             const elapsed = currentTime - startTime;
-            const progress = Math.min(elapsed / duration, 1);
 
-            /*
-             * 最初と最後だけ少しゆっくりにする動き
+            const progress = Math.min(
+              elapsed / duration,
+              1
+            );
+
+            /**
+             * 開始時と停止時だけ少しゆっくりになる動き
              */
             const eased =
               progress < 0.5
                 ? 2 * progress * progress
-                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+                : 1 -
+                  Math.pow(-2 * progress + 2, 2) / 2;
 
             this.doorObject.position.lerpVectors(
               startPosition,
@@ -181,11 +213,15 @@
 
             if (progress < 1) {
               requestAnimationFrame(animate);
-            } else {
-              this.doorObject.position.copy(endPosition);
-              this.isMoving = false;
-              resolve(true);
+              return;
             }
+
+            this.doorObject.position.copy(
+              endPosition
+            );
+
+            this.isMoving = false;
+            resolve(true);
           };
 
           requestAnimationFrame(animate);
@@ -196,10 +232,17 @@
 </head>
 
 <body>
-  <div id="statusBox">車両モデルを読み込んでいます</div>
+  <div id="statusBox">
+    車両モデルを読み込んでいます
+  </div>
+
   <div id="infoBox"></div>
 
-  <button id="startBtn" type="button" disabled>
+  <button
+    id="startBtn"
+    type="button"
+    disabled
+  >
     読み込み中
   </button>
 
@@ -218,50 +261,68 @@
     loading-screen="enabled: false"
   >
 
-    <a-assets timeout="60000">
+    <!--
+      30MB程度あるため、読み込み猶予を長めにしています。
+    -->
+    <a-assets timeout="120000">
       <a-asset-item
         id="carAsset"
-        src="./assets/car_test.glb">
+        src="./assets/car_test.glb"
+      >
       </a-asset-item>
     </a-assets>
 
     <a-camera
       position="0 0 0"
-      look-controls="enabled: false">
+      look-controls="enabled: false"
+    >
     </a-camera>
 
-    <!-- 全体を明るくする光 -->
+    <!-- 車体全体を明るくする光 -->
     <a-light
       type="ambient"
-      intensity="1.2">
+      intensity="1.2"
+    >
     </a-light>
 
-    <!-- 太陽光のような方向性のある光 -->
+    <!-- 太陽光に近い方向性のある光 -->
     <a-light
       type="directional"
       intensity="1.1"
-      position="1 3 2">
+      position="1 3 2"
+    >
     </a-light>
 
     <a-entity
       id="target"
-      mindar-image-target="targetIndex: 0">
+      mindar-image-target="targetIndex: 0"
+    >
 
-      <!-- 車両全体を動かす親オブジェクト -->
+      <!--
+        position:
+        X 0.3から左方向へ出発させます。
+        Z 0.12で紙面から少し持ち上げます。
+
+        rotation:
+        X 90度で紙面上に車を立たせます。
+        Z 180度で車の頭を左向きにします。
+      -->
       <a-entity
         id="carRoot"
-        position="-0.3 0 0"
-        rotation="0 0 0"
-        scale="0.20 0.20 0.20">
+        position="0.3 0 0.12"
+        rotation="90 0 180"
+        scale="0.20 0.20 0.20"
+      >
 
         <a-gltf-model
           id="carModel"
           src="#carAsset"
           sliding-door="
             doorName: Slide_Door;
-            openOffset: 0.7 0 0;
+            openOffset: -0.32 0 0;
             duration: 1200;
-          ">
+          "
+        >
         </a-gltf-model>
 
       </a-entity>
@@ -270,14 +331,36 @@
   </a-scene>
 
   <script>
-    const infoBox = document.getElementById("infoBox");
-    const statusBox = document.getElementById("statusBox");
-    const startBtn = document.getElementById("startBtn");
-    const carRoot = document.getElementById("carRoot");
-    const carModel = document.getElementById("carModel");
+    const infoBox =
+      document.getElementById("infoBox");
+
+    const statusBox =
+      document.getElementById("statusBox");
+
+    const startBtn =
+      document.getElementById("startBtn");
+
+    const carRoot =
+      document.getElementById("carRoot");
+
+    const carModel =
+      document.getElementById("carModel");
+
+    const target =
+      document.getElementById("target");
 
     let modelReady = false;
+    let targetVisible = false;
     let experienceRunning = false;
+
+    /**
+     * 車両の開始位置と終了位置
+     *
+     * 頭が左向きなので、
+     * Xのプラス側からマイナス側へ移動します。
+     */
+    const CAR_START_POSITION = "0.3 0 0.12";
+    const CAR_END_POSITION = "-0.3 0 0.12";
 
     function sleep(ms) {
       return new Promise((resolve) => {
@@ -291,20 +374,28 @@
     }
 
     /**
-     * 縦持ちでは小さめ、横持ちでは少し大きめにします。
+     * 縦持ちでは小さめ、
+     * 横持ちでは少し大きめにします。
      */
     function adjustCarScale() {
-      const isPortrait = window.innerHeight > window.innerWidth;
+      const isPortrait =
+        window.innerHeight > window.innerWidth;
 
       if (isPortrait) {
-        carRoot.setAttribute("scale", "0.20 0.20 0.20");
+        carRoot.setAttribute(
+          "scale",
+          "0.20 0.20 0.20"
+        );
       } else {
-        carRoot.setAttribute("scale", "0.28 0.28 0.28");
+        carRoot.setAttribute(
+          "scale",
+          "0.28 0.28 0.28"
+        );
       }
     }
 
     /**
-     * 車両を左から右へ移動させます。
+     * 車両を左方向へ移動させます。
      */
     function moveCar() {
       return new Promise((resolve) => {
@@ -313,6 +404,7 @@
             "animationcomplete__move",
             onComplete
           );
+
           resolve();
         };
 
@@ -321,94 +413,174 @@
           onComplete
         );
 
-        carRoot.setAttribute("animation__move", {
-          property: "position",
-          from: "-0.3 0 0",
-          to: "0.3 0 0",
-          dur: 3000,
-          easing: "linear"
-        });
+        carRoot.setAttribute(
+          "animation__move",
+          {
+            property: "position",
+            from: CAR_START_POSITION,
+            to: CAR_END_POSITION,
+            dur: 3000,
+            easing: "linear"
+          }
+        );
       });
     }
 
+    /**
+     * 扉の開閉を実行します。
+     */
     async function moveDoor(open) {
       const doorComponent =
         carModel.components["sliding-door"];
 
-      if (!doorComponent || !doorComponent.doorObject) {
-        /*
-         * 扉が見つからなくても車両移動自体は続けます。
-         */
+      if (
+        !doorComponent ||
+        !doorComponent.doorObject
+      ) {
+        console.warn(
+          "扉が見つからないため、扉の動きを省略します。"
+        );
+
         return;
       }
 
       await doorComponent.moveDoor(open);
     }
 
+    /**
+     * 体験の一連の流れ
+     */
     async function startExperience() {
       if (!modelReady || experienceRunning) {
         return;
       }
 
       experienceRunning = true;
+
       startBtn.disabled = true;
       startBtn.style.display = "none";
 
-      /*
-       * 乗車時に扉を開く
+      /**
+       * 乗車前に扉を開きます。
        */
       await moveDoor(true);
 
-      showMessage("① 予約番号をお伝えください");
+      showMessage(
+        "① 予約番号をお伝えください"
+      );
+
       await sleep(2000);
 
-      showMessage("② 料金は前払いになります");
+      showMessage(
+        "② 料金は前払いになります"
+      );
+
       await sleep(2000);
 
-      /*
-       * 出発前に扉を閉じる
+      /**
+       * 出発前に扉を閉じます。
        */
       await moveDoor(false);
 
-      showMessage("③ 目的地へ向かいます");
+      showMessage(
+        "③ 目的地へ向かいます"
+      );
+
       await sleep(800);
 
       await moveCar();
 
-      showMessage("目的地に到着しました");
+      showMessage(
+        "目的地に到着しました"
+      );
+
       await sleep(1200);
 
-      /*
-       * 到着後に扉を開く
+      /**
+       * 到着後に扉を開きます。
        */
       await moveDoor(true);
 
-      showMessage("ご乗車ありがとうございました");
+      showMessage(
+        "ご乗車ありがとうございました"
+      );
     }
 
-    carModel.addEventListener("model-loaded", () => {
-      modelReady = true;
-      statusBox.textContent =
-        "認識画像にスマートフォンをかざしてください";
+    /**
+     * GLBの読み込み完了
+     */
+    carModel.addEventListener(
+      "model-loaded",
+      () => {
+        modelReady = true;
 
-      startBtn.disabled = false;
-      startBtn.textContent = "体験スタート";
+        statusBox.textContent =
+          "認識画像にスマートフォンをかざしてください";
 
-      adjustCarScale();
-    });
+        startBtn.disabled = false;
+        startBtn.textContent = "体験スタート";
 
-    carModel.addEventListener("door-not-found", () => {
-      console.warn(
-        "扉は動きませんが、車両表示と移動は実行できます。"
-      );
-    });
+        adjustCarScale();
+      }
+    );
 
-    startBtn.addEventListener("click", startExperience);
+    /**
+     * 認識画像を検出
+     */
+    target.addEventListener(
+      "targetFound",
+      () => {
+        targetVisible = true;
 
-    window.addEventListener("resize", adjustCarScale);
-    window.addEventListener("orientationchange", () => {
-      window.setTimeout(adjustCarScale, 200);
-    });
+        statusBox.textContent =
+          "認識画像を検出しました";
+      }
+    );
+
+    /**
+     * 認識画像を見失った場合
+     */
+    target.addEventListener(
+      "targetLost",
+      () => {
+        targetVisible = false;
+
+        statusBox.textContent =
+          "もう一度、認識画像にかざしてください";
+      }
+    );
+
+    /**
+     * 扉オブジェクトが見つからなかった場合
+     */
+    carModel.addEventListener(
+      "door-not-found",
+      () => {
+        console.warn(
+          "扉は動きませんが、車両表示と移動は実行できます。"
+        );
+      }
+    );
+
+    startBtn.addEventListener(
+      "click",
+      startExperience
+    );
+
+    window.addEventListener(
+      "resize",
+      adjustCarScale
+    );
+
+    window.addEventListener(
+      "orientationchange",
+      () => {
+        window.setTimeout(
+          adjustCarScale,
+          200
+        );
+      }
+    );
 
     adjustCarScale();
   </script>
