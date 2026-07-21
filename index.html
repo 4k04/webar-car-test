@@ -394,6 +394,12 @@
     const CAR_MOVE_DURATION = 3000;
 
     /**
+     * 画面固定後の3D表示全体の拡大率です。
+     * 1.5で1.5倍、2.0で2倍になります。
+     */
+    const DISPLAY_SCALE_MULTIPLIER = 2.0;
+
+    /**
      * ジャイロ回転の追従率です。
      * 大きいほど素早く、小さいほど滑らかになります。
      */
@@ -791,7 +797,9 @@
 
       gyroPivot.object3D.position.set(0, 0, 0);
       gyroPivot.object3D.quaternion.identity();
-      gyroPivot.object3D.scale.set(1, 1, 1);
+      gyroPivot.object3D.scale.setScalar(
+        DISPLAY_SCALE_MULTIPLIER
+      );
 
       /**
        * DOM上ではtargetの子のままですが、
