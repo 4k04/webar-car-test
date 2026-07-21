@@ -263,6 +263,10 @@
     loading-screen="enabled: false"
   >
 
+    <!--
+      GLBが約30MBあるため、
+      読み込み猶予を長めにしています。
+    -->
     <a-assets timeout="120000">
       <a-asset-item
         id="carAsset"
@@ -277,44 +281,28 @@
       look-controls="enabled: false"
     >
       <!--
-        認識後に表示する固定車両です。
-        最初からtargetの外に置くことで、
-        MindARの表示・非表示に巻き込まれません。
+        認識後、車両をこのアンカーへ移します。
+        カメラの子なので画面上の表示位置が固定されます。
       -->
       <a-entity
         id="screenAnchor"
         visible="false"
       >
-        <a-entity id="gyroPivot">
-          <a-entity
-            id="fixedCarRoot"
-            position="0 0 0"
-            rotation="-90 0 180"
-            scale="0.20 0.20 0.20"
-            visible="true"
-          >
-            <a-gltf-model
-              id="fixedCarModel"
-              src="#carAsset"
-              visible="true"
-              sliding-door="
-                doorName: Slide_Door;
-                openOffset: -0.26 0 0;
-                duration: 1200;
-              "
-            >
-            </a-gltf-model>
-          </a-entity>
-        </a-entity>
+        <!--
+          スマートフォンの向きに応じた回転だけを担当します。
+        -->
+        <a-entity id="gyroPivot"></a-entity>
       </a-entity>
     </a-camera>
 
+    <!-- 車体全体を明るくする光 -->
     <a-light
       type="ambient"
       intensity="1.2"
     >
     </a-light>
 
+    <!-- 太陽光に近い方向性のある光 -->
     <a-light
       type="directional"
       intensity="1.1"
@@ -322,25 +310,33 @@
     >
     </a-light>
 
-    <!--
-      認識位置を確認するためだけのプレビュー車両です。
-      固定完了後は非表示にします。
-    -->
     <a-entity
       id="target"
       mindar-image-target="targetIndex: 0"
     >
+
+      <!--
+        認識中は、これまでどおり認識画像を基準に表示します。
+        スタート時に画面固定用アンカーへ移動します。
+      -->
       <a-entity
-        id="previewCarRoot"
+        id="carRoot"
         position="0.3 0 0.12"
         rotation="-90 0 180"
         scale="0.20 0.20 0.20"
       >
+
         <a-gltf-model
-          id="previewCarModel"
+          id="carModel"
           src="#carAsset"
+          sliding-door="
+            doorName: Slide_Door;
+            openOffset: -0.26 0 0;
+            duration: 1200;
+          "
         >
         </a-gltf-model>
+
       </a-entity>
     </a-entity>
 
@@ -365,26 +361,25 @@
     const target =
       document.getElementById("target");
 
-    const previewCarRoot =
-      document.getElementById("previewCarRoot");
-
     const screenAnchor =
       document.getElementById("screenAnchor");
 
     const gyroPivot =
       document.getElementById("gyroPivot");
 
-    const fixedCarRoot =
-      document.getElementById("fixedCarRoot");
+    const carRoot =
+      document.getElementById("carRoot");
 
-    const fixedCarModel =
-      document.getElementById("fixedCarModel");
+    const carModel =
+      document.getElementById("carModel");
 
-    let fixedModelReady = false;
+    let arSystem = null;
+    let modelReady = false;
     let targetVisible = false;
+    let experienceRunning = false;
+    let trackingPaused = false;
     let screenLocked = false;
     let lockScheduled = false;
-    let experienceRunning = false;
 
     let gyroListenerAdded = false;
     let gyroPermissionGranted = false;
@@ -392,40 +387,45 @@
     let gyroReferenceReady = false;
 
     /**
-     * 画面上の固定位置です。
-     * X: 左0、中央0.5、右1
-     * Y: 上0、中央0.5、下1
+     * 車両を固定する画面上の位置です。
+     *
+     * Xは左端が0、中央が0.5、右端が1です。
+     * Yは上端が0、中央が0.5、下端が1です。
      */
     const SCREEN_X_RATIO = 0.50;
     const SCREEN_Y_RATIO = 0.58;
 
     /**
-     * カメラ前方の仮想距離です。
+     * カメラから固定車両までの仮想的な距離です。
+     * 小さくすると大きく、数値を大きくすると小さく見えます。
      */
     const SCREEN_ANCHOR_DEPTH = 2.0;
 
     /**
-     * 希望する表示倍率です。
-     * はみ出す端末では自動的に縮小します。
+     * 画面固定後の3D表示全体の拡大率です。
+     * 1.5で1.5倍、2.0で2倍になります。
      */
     const DISPLAY_SCALE_MULTIPLIER = 1.7;
-    const SCREEN_SAFE_MARGIN = 0.82;
 
     /**
-     * 車両のフロント方向です。
-     * 逆向きに動く場合は-1へ変更します。
+     * GLBモデルのフロント方向です。
+     *
+     * 現在はローカル+Xを車両前方として扱います。
+     * 後ろ向きに走る場合は(-1, 0, 0)へ変更してください。
      */
     const CAR_FRONT_LOCAL_AXIS =
       new THREE.Vector3(1, 0, 0);
 
     /**
-     * 出発距離と時間です。
+     * 出発時の移動距離です。
+     * 0.75なら、現在の奥行きにおける画面幅の約75％分です。
      */
     const DEPARTURE_SCREEN_WIDTH_RATIO = 0.75;
     const CAR_MOVE_DURATION = 3000;
 
     /**
-     * ジャイロ回転の滑らかさです。
+     * ジャイロ回転の追従率です。
+     * 大きいほど素早く、小さいほど滑らかになります。
      */
     const GYRO_SMOOTHING = 0.12;
 
@@ -436,7 +436,7 @@
       new THREE.Quaternion();
 
     const lockedCarScale =
-      new THREE.Vector3();
+      new THREE.Vector3(1, 1, 1);
 
     const latestDeviceQuaternion =
       new THREE.Quaternion();
@@ -478,19 +478,29 @@
       infoBox.style.display = "block";
     }
 
+    /**
+     * 読み込み状態と認識状態に合わせて、
+     * スタートボタンを更新します。
+     */
     function updateStartButton() {
       if (experienceRunning) {
         startBtn.disabled = true;
         return;
       }
 
-      if (!fixedModelReady) {
+      if (!modelReady) {
         startBtn.disabled = true;
         startBtn.textContent = "読み込み中";
         return;
       }
 
-      if (!screenLocked) {
+      if (!arSystem) {
+        startBtn.disabled = true;
+        startBtn.textContent = "AR準備中";
+        return;
+      }
+
+      if (!targetVisible && !screenLocked) {
         startBtn.disabled = true;
         startBtn.textContent =
           "認識画像を映してください";
@@ -498,11 +508,229 @@
       }
 
       startBtn.disabled = false;
-      startBtn.textContent = "体験スタート";
+      startBtn.textContent = screenLocked
+        ? "もう一度体験"
+        : "体験スタート";
     }
 
     /**
-     * 画面比率をカメラ前方の3D座標へ変換します。
+     * 認識中だけ、端末の向きに合わせて
+     * 車両の表示サイズを変更します。
+     *
+     * 画面固定後は、認識時のサイズを維持します。
+     */
+    function adjustCarScale() {
+      if (screenLocked) {
+        return;
+      }
+
+      const isPortrait =
+        window.innerHeight > window.innerWidth;
+
+      if (isPortrait) {
+        carRoot.setAttribute(
+          "scale",
+          "0.20 0.20 0.20"
+        );
+      } else {
+        carRoot.setAttribute(
+          "scale",
+          "0.28 0.28 0.28"
+        );
+      }
+    }
+
+    /**
+     * 端末の向きをThree.jsのQuaternionへ変換します。
+     */
+    function createDeviceQuaternion(event) {
+      const alpha = THREE.MathUtils.degToRad(
+        event.alpha || 0
+      );
+
+      const beta = THREE.MathUtils.degToRad(
+        event.beta || 0
+      );
+
+      const gamma = THREE.MathUtils.degToRad(
+        event.gamma || 0
+      );
+
+      let screenAngle = 0;
+
+      if (
+        window.screen.orientation &&
+        typeof window.screen.orientation.angle === "number"
+      ) {
+        screenAngle =
+          window.screen.orientation.angle;
+      } else if (
+        typeof window.orientation === "number"
+      ) {
+        screenAngle =
+          window.orientation;
+      }
+
+      const orientation =
+        THREE.MathUtils.degToRad(screenAngle);
+
+      deviceEuler.set(
+        beta,
+        alpha,
+        -gamma,
+        "YXZ"
+      );
+
+      const quaternion =
+        new THREE.Quaternion();
+
+      quaternion.setFromEuler(deviceEuler);
+      quaternion.multiply(deviceCameraCorrection);
+
+      screenRotationQuaternion.setFromAxisAngle(
+        deviceZAxis,
+        -orientation
+      );
+
+      quaternion.multiply(
+        screenRotationQuaternion
+      );
+
+      return quaternion.normalize();
+    }
+
+    /**
+     * 端末の向きが更新された時に呼び出されます。
+     */
+    function handleDeviceOrientation(event) {
+      if (
+        event.alpha === null &&
+        event.beta === null &&
+        event.gamma === null
+      ) {
+        return;
+      }
+
+      latestDeviceQuaternion.copy(
+        createDeviceQuaternion(event)
+      );
+
+      gyroDataAvailable = true;
+
+      if (!screenLocked) {
+        return;
+      }
+
+      if (!gyroReferenceReady) {
+        gyroReferenceQuaternion.copy(
+          latestDeviceQuaternion
+        );
+
+        gyroReferenceReady = true;
+        return;
+      }
+
+      /**
+       * 認識時の端末角度から、
+       * 現在どれだけ向きが変わったかを求めます。
+       */
+      gyroRelativeQuaternion
+        .copy(gyroReferenceQuaternion)
+        .invert()
+        .multiply(latestDeviceQuaternion);
+
+      /**
+       * 端末が右を向いた時に、
+       * 車両は逆方向へ回転させます。
+       *
+       * これにより、画面位置を固定したまま
+       * 車両の反対側を見ているように見せます。
+       */
+      gyroTargetQuaternion
+        .copy(gyroRelativeQuaternion)
+        .invert();
+    }
+
+    /**
+     * iPhone等で必要なセンサー許可を取得します。
+     * Android等、許可APIがない端末では
+     * そのままイベントを登録します。
+     */
+    async function enableGyroscope() {
+      if (gyroListenerAdded) {
+        return gyroPermissionGranted;
+      }
+
+      if (
+        typeof window.DeviceOrientationEvent ===
+        "undefined"
+      ) {
+        console.warn(
+          "この端末は端末方向センサーに対応していません。"
+        );
+
+        return false;
+      }
+
+      try {
+        if (
+          typeof DeviceOrientationEvent
+            .requestPermission === "function"
+        ) {
+          const permission =
+            await DeviceOrientationEvent
+              .requestPermission();
+
+          if (permission !== "granted") {
+            console.warn(
+              "端末方向センサーの利用が許可されませんでした。"
+            );
+
+            return false;
+          }
+        }
+
+        window.addEventListener(
+          "deviceorientation",
+          handleDeviceOrientation,
+          true
+        );
+
+        gyroListenerAdded = true;
+        gyroPermissionGranted = true;
+
+        return true;
+      } catch (error) {
+        console.error(
+          "端末方向センサーの許可取得に失敗しました。",
+          error
+        );
+
+        return false;
+      }
+    }
+
+    /**
+     * 現在の端末角度を基準角度として保存します。
+     */
+    function calibrateGyroscope() {
+      gyroPivot.object3D.quaternion.identity();
+      gyroTargetQuaternion.identity();
+
+      if (gyroDataAvailable) {
+        gyroReferenceQuaternion.copy(
+          latestDeviceQuaternion
+        );
+
+        gyroReferenceReady = true;
+      } else {
+        gyroReferenceReady = false;
+      }
+    }
+
+    /**
+     * 0～1で指定した画面座標を、
+     * カメラ前方の3D座標へ変換します。
      */
     function getFixedScreenPosition() {
       const camera =
@@ -551,111 +779,73 @@
     }
 
     /**
-     * 画面内へ収まる最大倍率を求めます。
+     * 認識中に表示されている同じ車両を、
+     * カメラ配下の固定アンカーへ移します。
+     *
+     * 別モデルへの切替やDOMのappendChildは行いません。
+     * 以前消えなかった構造を維持したまま、
+     * 表示位置だけを画面座標で固定します。
      */
-    function getFittingDisplayScale() {
-      const camera =
-        cameraEl.getObject3D("camera");
+    function lockCarToScreen() {
+      if (screenLocked) {
+        return true;
+      }
 
-      if (!camera) {
-        return DISPLAY_SCALE_MULTIPLIER;
+      if (
+        !cameraEl.object3D ||
+        !screenAnchor.object3D ||
+        !gyroPivot.object3D ||
+        !carRoot.object3D
+      ) {
+        console.error(
+          "画面固定に必要な3Dオブジェクトを取得できません。"
+        );
+
+        return false;
       }
 
       sceneEl.object3D.updateMatrixWorld(true);
-      fixedCarRoot.object3D.updateMatrixWorld(true);
+      cameraEl.object3D.updateMatrixWorld(true);
+      carRoot.object3D.updateMatrixWorld(true);
 
-      const box =
-        new THREE.Box3().setFromObject(
-          fixedCarRoot.object3D
-        );
+      const worldQuaternion =
+        new THREE.Quaternion();
 
-      const sphere =
-        new THREE.Sphere();
+      const worldScale =
+        new THREE.Vector3();
 
-      box.getBoundingSphere(sphere);
+      const cameraWorldQuaternion =
+        new THREE.Quaternion();
 
-      if (
-        !Number.isFinite(sphere.radius) ||
-        sphere.radius <= 0
-      ) {
-        return DISPLAY_SCALE_MULTIPLIER;
-      }
-
-      const depth =
-        SCREEN_ANCHOR_DEPTH;
-
-      const verticalFov =
-        THREE.MathUtils.degToRad(
-          camera.fov
-        );
-
-      const visibleHeight =
-        2 *
-        Math.tan(verticalFov / 2) *
-        depth;
-
-      const aspect =
-        camera.aspect ||
-        window.innerWidth /
-          window.innerHeight;
-
-      const visibleWidth =
-        visibleHeight * aspect;
-
-      const ndcX =
-        SCREEN_X_RATIO * 2 - 1;
-
-      const ndcY =
-        1 - SCREEN_Y_RATIO * 2;
-
-      const availableHalfWidth =
-        visibleWidth / 2 *
-        Math.min(
-          1 - ndcX,
-          1 + ndcX
-        );
-
-      const availableHalfHeight =
-        visibleHeight / 2 *
-        Math.min(
-          1 - ndcY,
-          1 + ndcY
-        );
-
-      const availableRadius =
-        Math.min(
-          availableHalfWidth,
-          availableHalfHeight
-        ) *
-        SCREEN_SAFE_MARGIN;
-
-      const maximumScale =
-        availableRadius /
-        sphere.radius;
-
-      return Math.max(
-        0.1,
-        Math.min(
-          DISPLAY_SCALE_MULTIPLIER,
-          maximumScale
-        )
+      /**
+       * 認識中に実際に見えている回転と大きさを保存します。
+       */
+      carRoot.object3D.getWorldQuaternion(
+        worldQuaternion
       );
-    }
 
-    /**
-     * 認識後に固定車両を表示します。
-     *
-     * 認識用モデルと固定用モデルを分けているため、
-     * targetが消えても固定車両は消えません。
-     */
-    function lockFixedCarToScreen() {
-      if (
-        screenLocked ||
-        !fixedModelReady
-      ) {
-        return;
-      }
+      carRoot.object3D.getWorldScale(
+        worldScale
+      );
 
+      cameraEl.object3D.getWorldQuaternion(
+        cameraWorldQuaternion
+      );
+
+      /**
+       * 車両のワールド回転を、
+       * カメラ基準のローカル回転へ変換します。
+       */
+      const cameraLocalQuaternion =
+        cameraWorldQuaternion
+          .clone()
+          .invert()
+          .multiply(worldQuaternion);
+
+      /**
+       * 認識した位置は使わず、
+       * 指定したスマホ画面座標へ固定します。
+       */
       screenAnchor.object3D.position.copy(
         getFixedScreenPosition()
       );
@@ -665,47 +855,35 @@
 
       gyroPivot.object3D.position.set(0, 0, 0);
       gyroPivot.object3D.quaternion.identity();
-      gyroPivot.object3D.scale.set(1, 1, 1);
-
-      fixedCarRoot.object3D.position.set(0, 0, 0);
-      fixedCarRoot.object3D.rotation.set(
-        THREE.MathUtils.degToRad(-90),
-        0,
-        THREE.MathUtils.degToRad(180)
-      );
-
-      fixedCarRoot.object3D.scale.set(
-        0.20,
-        0.20,
-        0.20
-      );
-
-      fixedCarRoot.object3D.visible = true;
-      fixedCarModel.object3D.visible = true;
-
-      screenAnchor.object3D.visible = true;
-      screenAnchor.setAttribute(
-        "visible",
-        true
+      gyroPivot.object3D.scale.setScalar(
+        DISPLAY_SCALE_MULTIPLIER
       );
 
       /**
-       * 固定表示が確認できてから、
-       * 認識用プレビューだけを隠します。
+       * 重要:
+       * HTMLの親子関係は変更しません。
+       * 読み込み済みの同じobject3Dだけを
+       * gyroPivotの子へ移します。
        */
-      previewCarRoot.object3D.visible = false;
-      previewCarRoot.setAttribute(
-        "visible",
-        false
+      gyroPivot.object3D.add(
+        carRoot.object3D
       );
 
-      sceneEl.object3D.updateMatrixWorld(true);
+      carRoot.object3D.position.set(0, 0, 0);
+      carRoot.object3D.quaternion.copy(
+        cameraLocalQuaternion
+      );
+      carRoot.object3D.scale.copy(
+        worldScale
+      );
 
-      const fittingScale =
-        getFittingDisplayScale();
+      carRoot.object3D.visible = true;
+      carModel.object3D.visible = true;
 
-      gyroPivot.object3D.scale.setScalar(
-        fittingScale
+      carRoot.object3D.traverse(
+        (object) => {
+          object.visible = true;
+        }
       );
 
       lockedAnchorPosition.copy(
@@ -713,31 +891,42 @@
       );
 
       lockedCarQuaternion.copy(
-        fixedCarRoot.object3D.quaternion
+        carRoot.object3D.quaternion
       );
 
       lockedCarScale.copy(
-        fixedCarRoot.object3D.scale
+        carRoot.object3D.scale
+      );
+
+      screenAnchor.object3D.visible = true;
+      screenAnchor.setAttribute(
+        "visible",
+        true
       );
 
       screenLocked = true;
       calibrateGyroscope();
 
-      statusBox.textContent =
-        "表示位置を固定しました。体験スタートを押してください";
+      sceneEl.object3D.updateMatrixWorld(true);
 
-      updateStartButton();
+      return true;
     }
 
     /**
-     * targetFound直後の不安定な1フレームを避けます。
+     * 認識画像を検出した段階で、
+     * スタートボタンを押す前に画面固定します。
+     *
+     * targetFound直後の姿勢がまだ不安定な場合に備え、
+     * 2フレーム待ってから現在位置を保存します。
      */
     function scheduleScreenLock() {
       if (
         screenLocked ||
         lockScheduled ||
+        trackingPaused ||
         !targetVisible ||
-        !fixedModelReady
+        !modelReady ||
+        !arSystem
       ) {
         return;
       }
@@ -745,192 +934,74 @@
       lockScheduled = true;
 
       statusBox.textContent =
-        "認識画像を検出しました。表示を固定しています";
+        "認識画像を検出しました。表示位置を固定しています";
 
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
           lockScheduled = false;
 
+          /**
+           * 待機中に認識画像を見失った場合は、
+           * 固定せず次の認識を待ちます。
+           */
           if (
-            !screenLocked &&
-            targetVisible &&
-            fixedModelReady
+            screenLocked ||
+            trackingPaused ||
+            !targetVisible ||
+            !modelReady ||
+            !arSystem
           ) {
-            lockFixedCarToScreen();
+            updateStartButton();
+            return;
           }
+
+          const locked =
+            lockCarToScreen();
+
+          if (!locked) {
+            statusBox.textContent =
+              "表示位置の固定に失敗しました";
+
+            updateStartButton();
+            return;
+          }
+
+          /**
+           * 車両をカメラ側へ移した後、
+           * MindARの画像追跡だけを停止します。
+           * カメラ映像は表示したままです。
+           */
+          arSystem.pause(true);
+          trackingPaused = true;
+
+          /**
+           * pause直後にMindAR側の表示更新が入っても、
+           * 固定側の車両を表示状態に保ちます。
+           */
+          screenAnchor.object3D.visible = true;
+          carRoot.object3D.visible = true;
+          carModel.object3D.visible = true;
+
+          window.requestAnimationFrame(() => {
+            screenAnchor.object3D.visible = true;
+            carRoot.object3D.visible = true;
+            carModel.object3D.visible = true;
+          });
+
+          statusBox.textContent =
+            gyroPermissionGranted
+              ? "表示位置を固定しました。スマートフォンを傾けて見回せます"
+              : "表示位置を固定しました。体験スタートを押してください";
+
+          updateStartButton();
         });
       });
     }
 
     /**
-     * 端末の向きをQuaternionへ変換します。
+     * ジャイロによる目標回転へ、
+     * 毎フレーム滑らかに近づけます。
      */
-    function createDeviceQuaternion(event) {
-      const alpha =
-        THREE.MathUtils.degToRad(
-          event.alpha || 0
-        );
-
-      const beta =
-        THREE.MathUtils.degToRad(
-          event.beta || 0
-        );
-
-      const gamma =
-        THREE.MathUtils.degToRad(
-          event.gamma || 0
-        );
-
-      let screenAngle = 0;
-
-      if (
-        window.screen.orientation &&
-        typeof window.screen.orientation.angle ===
-          "number"
-      ) {
-        screenAngle =
-          window.screen.orientation.angle;
-      } else if (
-        typeof window.orientation === "number"
-      ) {
-        screenAngle =
-          window.orientation;
-      }
-
-      const orientation =
-        THREE.MathUtils.degToRad(
-          screenAngle
-        );
-
-      deviceEuler.set(
-        beta,
-        alpha,
-        -gamma,
-        "YXZ"
-      );
-
-      const quaternion =
-        new THREE.Quaternion();
-
-      quaternion.setFromEuler(deviceEuler);
-      quaternion.multiply(
-        deviceCameraCorrection
-      );
-
-      screenRotationQuaternion
-        .setFromAxisAngle(
-          deviceZAxis,
-          -orientation
-        );
-
-      quaternion.multiply(
-        screenRotationQuaternion
-      );
-
-      return quaternion.normalize();
-    }
-
-    function handleDeviceOrientation(event) {
-      if (
-        event.alpha === null &&
-        event.beta === null &&
-        event.gamma === null
-      ) {
-        return;
-      }
-
-      latestDeviceQuaternion.copy(
-        createDeviceQuaternion(event)
-      );
-
-      gyroDataAvailable = true;
-
-      if (!screenLocked) {
-        return;
-      }
-
-      if (!gyroReferenceReady) {
-        gyroReferenceQuaternion.copy(
-          latestDeviceQuaternion
-        );
-
-        gyroReferenceReady = true;
-        return;
-      }
-
-      gyroRelativeQuaternion
-        .copy(gyroReferenceQuaternion)
-        .invert()
-        .multiply(
-          latestDeviceQuaternion
-        );
-
-      gyroTargetQuaternion
-        .copy(gyroRelativeQuaternion)
-        .invert();
-    }
-
-    async function enableGyroscope() {
-      if (gyroListenerAdded) {
-        return gyroPermissionGranted;
-      }
-
-      if (
-        typeof window.DeviceOrientationEvent ===
-          "undefined"
-      ) {
-        return false;
-      }
-
-      try {
-        if (
-          typeof DeviceOrientationEvent
-            .requestPermission === "function"
-        ) {
-          const permission =
-            await DeviceOrientationEvent
-              .requestPermission();
-
-          if (permission !== "granted") {
-            return false;
-          }
-        }
-
-        window.addEventListener(
-          "deviceorientation",
-          handleDeviceOrientation,
-          true
-        );
-
-        gyroListenerAdded = true;
-        gyroPermissionGranted = true;
-
-        return true;
-      } catch (error) {
-        console.error(
-          "端末方向センサーを有効化できませんでした。",
-          error
-        );
-
-        return false;
-      }
-    }
-
-    function calibrateGyroscope() {
-      gyroPivot.object3D.quaternion.identity();
-      gyroTargetQuaternion.identity();
-
-      if (gyroDataAvailable) {
-        gyroReferenceQuaternion.copy(
-          latestDeviceQuaternion
-        );
-
-        gyroReferenceReady = true;
-      } else {
-        gyroReferenceReady = false;
-      }
-    }
-
     function updateGyroscopeView() {
       if (
         screenLocked &&
@@ -947,6 +1018,10 @@
       );
     }
 
+    /**
+     * screenAnchorがある奥行きで、
+     * カメラに映る横幅を計算します。
+     */
     function getVisibleWidthAtAnchorDepth() {
       const camera =
         cameraEl.getObject3D("camera");
@@ -982,12 +1057,13 @@
     }
 
     /**
-     * 車両のフロント方向を画面上の方向へ変換します。
+     * 出発時点の車両フロント方向を、
+     * カメラから見た画面上の方向へ変換します。
      */
     function getVehicleFrontScreenDirection() {
       sceneEl.object3D.updateMatrixWorld(true);
       cameraEl.object3D.updateMatrixWorld(true);
-      fixedCarRoot.object3D.updateMatrixWorld(true);
+      carRoot.object3D.updateMatrixWorld(true);
 
       const carWorldQuaternion =
         new THREE.Quaternion();
@@ -995,17 +1071,15 @@
       const cameraWorldQuaternion =
         new THREE.Quaternion();
 
-      fixedCarRoot.object3D
-        .getWorldQuaternion(
-          carWorldQuaternion
-        );
+      carRoot.object3D.getWorldQuaternion(
+        carWorldQuaternion
+      );
 
-      cameraEl.object3D
-        .getWorldQuaternion(
-          cameraWorldQuaternion
-        );
+      cameraEl.object3D.getWorldQuaternion(
+        cameraWorldQuaternion
+      );
 
-      const direction =
+      const cameraLocalDirection =
         CAR_FRONT_LOCAL_AXIS
           .clone()
           .applyQuaternion(
@@ -1017,17 +1091,29 @@
               .invert()
           );
 
-      direction.z = 0;
+      /**
+       * 画面上の移動にするため、
+       * 奥行き成分は使用しません。
+       */
+      cameraLocalDirection.z = 0;
 
-      if (direction.lengthSq() < 0.000001) {
-        direction.set(-1, 0, 0);
+      /**
+       * フロントがカメラ正面を向いていて、
+       * 画面上の方向を求められない場合は左へ出発します。
+       */
+      if (
+        cameraLocalDirection.lengthSq() <
+        0.000001
+      ) {
+        cameraLocalDirection.set(-1, 0, 0);
       }
 
-      return direction.normalize();
+      return cameraLocalDirection.normalize();
     }
 
     /**
-     * 固定表示全体を車両フロント方向へ移動します。
+     * 車体・扉を含む固定表示全体を、
+     * 車両のフロント方向へ移動させます。
      */
     function moveAllContentForward() {
       return new Promise((resolve) => {
@@ -1059,18 +1145,14 @@
           const elapsed =
             currentTime - startTime;
 
-          const progress =
-            Math.min(
-              elapsed /
-                CAR_MOVE_DURATION,
-              1
-            );
+          const progress = Math.min(
+            elapsed / CAR_MOVE_DURATION,
+            1
+          );
 
           const eased =
             progress < 0.5
-              ? 2 *
-                progress *
-                progress
+              ? 2 * progress * progress
               : 1 -
                 Math.pow(
                   -2 * progress + 2,
@@ -1105,11 +1187,12 @@
       });
     }
 
+    /**
+     * 扉の開閉を実行します。
+     */
     async function moveDoor(open) {
       const doorComponent =
-        fixedCarModel.components[
-          "sliding-door"
-        ];
+        carModel.components["sliding-door"];
 
       if (
         !doorComponent ||
@@ -1125,29 +1208,26 @@
       await doorComponent.moveDoor(open);
     }
 
+    /**
+     * 車両と扉を開始状態へ戻します。
+     */
     function resetExperienceObjects() {
-      screenAnchor.object3D.position.copy(
-        lockedAnchorPosition
-      );
+      if (screenLocked) {
+        screenAnchor.object3D.position.copy(
+          lockedAnchorPosition
+        );
 
-      fixedCarRoot.object3D.position.set(
-        0,
-        0,
-        0
-      );
-
-      fixedCarRoot.object3D.quaternion.copy(
-        lockedCarQuaternion
-      );
-
-      fixedCarRoot.object3D.scale.copy(
-        lockedCarScale
-      );
+        carRoot.object3D.position.set(0, 0, 0);
+        carRoot.object3D.quaternion.copy(
+          lockedCarQuaternion
+        );
+        carRoot.object3D.scale.copy(
+          lockedCarScale
+        );
+      }
 
       const doorComponent =
-        fixedCarModel.components[
-          "sliding-door"
-        ];
+        carModel.components["sliding-door"];
 
       if (
         doorComponent &&
@@ -1161,9 +1241,13 @@
       }
     }
 
+    /**
+     * 体験の一連の流れです。
+     */
     async function startExperience() {
       if (
-        !fixedModelReady ||
+        !modelReady ||
+        !arSystem ||
         !screenLocked ||
         experienceRunning
       ) {
@@ -1171,24 +1255,37 @@
       }
 
       experienceRunning = true;
+
       startBtn.disabled = true;
       startBtn.style.display = "none";
 
+      /**
+       * iPhoneではクリック操作中に
+       * センサー許可を要求する必要があります。
+       *
+       * 画面位置の固定はすでに完了しているため、
+       * 許可画面を表示しても固定位置は変わりません。
+       */
       const gyroEnabled =
         await enableGyroscope();
 
       if (gyroEnabled) {
         calibrateGyroscope();
+      }
 
+      resetExperienceObjects();
+
+      if (gyroEnabled) {
         statusBox.textContent =
-          "表示位置は固定済みです。スマートフォンを傾けて見回せます";
+          "表示位置は固定済みです。スマートフォンをゆっくり傾けて見回せます";
       } else {
         statusBox.textContent =
           "表示位置は固定済みです。端末方向センサーは利用できません";
       }
 
-      resetExperienceObjects();
-
+      /**
+       * 乗車前に扉を開きます。
+       */
       await moveDoor(true);
 
       showMessage(
@@ -1203,6 +1300,9 @@
 
       await sleep(2000);
 
+      /**
+       * 出発前に扉を閉じます。
+       */
       await moveDoor(false);
 
       showMessage(
@@ -1211,6 +1311,10 @@
 
       await sleep(800);
 
+      /**
+       * 車体だけでなく、screenAnchor配下の
+       * 3D表示全体を車両のフロント方向へ動かします。
+       */
       await moveAllContentForward();
 
       showMessage(
@@ -1219,6 +1323,9 @@
 
       await sleep(1200);
 
+      /**
+       * 到着後に扉を開きます。
+       */
       await moveDoor(true);
 
       showMessage(
@@ -1226,48 +1333,52 @@
       );
 
       experienceRunning = false;
+
       startBtn.style.display = "block";
       updateStartButton();
     }
 
-    fixedCarModel.addEventListener(
+    /**
+     * GLBの読み込み完了時
+     */
+    carModel.addEventListener(
       "model-loaded",
       () => {
-        fixedModelReady = true;
-
-        /**
-         * 固定用モデルは読み込み済みでも、
-         * 認識まではアンカーごと非表示です。
-         */
-        screenAnchor.setAttribute(
-          "visible",
-          false
-        );
+        modelReady = true;
 
         statusBox.textContent =
           "認識画像にスマートフォンをかざしてください";
+
+        adjustCarScale();
+        updateStartButton();
+        scheduleScreenLock();
+      }
+    );
+
+    /**
+     * 認識画像を検出したとき
+     */
+    target.addEventListener(
+      "targetFound",
+      () => {
+        if (trackingPaused) {
+          return;
+        }
+
+        targetVisible = true;
 
         updateStartButton();
         scheduleScreenLock();
       }
     );
 
-    target.addEventListener(
-      "targetFound",
-      () => {
-        if (screenLocked) {
-          return;
-        }
-
-        targetVisible = true;
-        scheduleScreenLock();
-      }
-    );
-
+    /**
+     * 認識画像を見失ったとき
+     */
     target.addEventListener(
       "targetLost",
       () => {
-        if (screenLocked) {
+        if (trackingPaused) {
           return;
         }
 
@@ -1280,7 +1391,10 @@
       }
     );
 
-    fixedCarModel.addEventListener(
+    /**
+     * 扉オブジェクトが見つからなかった場合
+     */
+    carModel.addEventListener(
       "door-not-found",
       () => {
         console.warn(
@@ -1289,6 +1403,31 @@
       }
     );
 
+    function initializeArSystem() {
+      arSystem =
+        sceneEl.systems["mindar-image-system"];
+
+      updateStartButton();
+      scheduleScreenLock();
+    }
+
+    if (sceneEl.hasLoaded) {
+      initializeArSystem();
+    } else {
+      sceneEl.addEventListener(
+        "loaded",
+        initializeArSystem,
+        { once: true }
+      );
+    }
+
+    /**
+     * Androidなど、明示的な許可APIが不要な端末では、
+     * 読み込み時点からジャイロを有効にします。
+     *
+     * iPhoneはユーザー操作が必要なため、
+     * 体験スタート時に許可を求めます。
+     */
     if (
       typeof window.DeviceOrientationEvent !==
         "undefined" &&
@@ -1301,6 +1440,23 @@
     startBtn.addEventListener(
       "click",
       startExperience
+    );
+
+    window.addEventListener(
+      "resize",
+      () => {
+        if (screenLocked) {
+          screenAnchor.object3D.position.copy(
+            getFixedScreenPosition()
+          );
+
+          lockedAnchorPosition.copy(
+            screenAnchor.object3D.position
+          );
+        } else {
+          adjustCarScale();
+        }
+      }
     );
 
     window.addEventListener(
@@ -1318,6 +1474,8 @@
               );
 
               calibrateGyroscope();
+            } else {
+              adjustCarScale();
             }
           },
           300
@@ -1325,6 +1483,7 @@
       }
     );
 
+    adjustCarScale();
     updateStartButton();
     updateGyroscopeView();
   </script>
