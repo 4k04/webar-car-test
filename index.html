@@ -91,11 +91,11 @@
 
   <script>
     /**
-     * GLB内の扉オブジェクトだけを動かすコンポーネント
+     * GLB内の扉オブジェクトをスライドさせます。
      *
-     * Blender側の扉オブジェクト名が
+     * Blender側の扉オブジェクト名は
      * Slide_Door
-     * になっている前提です。
+     * とします。
      */
     AFRAME.registerComponent("sliding-door", {
       schema: {
@@ -106,14 +106,12 @@
 
         /**
          * 扉を開いたときの移動距離です。
-         *
-         * 現在はマイナス方向へ0.32移動します。
-         * 以前とは逆方向で、開く距離も短めです。
+         * 前回の-0.28から、少しだけ小さい-0.26へ変更。
          */
         openOffset: {
           type: "vec3",
           default: {
-            x: -0.32,
+            x: -0.26,
             y: 0,
             z: 0
           }
@@ -197,7 +195,7 @@
             );
 
             /**
-             * 開始時と停止時だけ少しゆっくりになる動き
+             * 開始時と停止時を少し滑らかにします。
              */
             const eased =
               progress < 0.5
@@ -250,6 +248,10 @@
     mindar-image="
       imageTargetSrc: ./targets.mind;
       autoStart: true;
+      filterMinCF: 0.0001;
+      filterBeta: 10;
+      warmupTolerance: 5;
+      missTolerance: 10;
     "
     renderer="
       colorManagement: true;
@@ -262,7 +264,8 @@
   >
 
     <!--
-      30MB程度あるため、読み込み猶予を長めにしています。
+      GLBが約30MBあるため、
+     読み込み猶予を長めにしています。
     -->
     <a-assets timeout="120000">
       <a-asset-item
@@ -299,13 +302,12 @@
     >
 
       <!--
-        position:
-        X 0.3から左方向へ出発させます。
-        Z 0.12で紙面から少し持ち上げます。
-
         rotation:
-        X 90度で紙面上に車を立たせます。
-        Z 180度で車の頭を左向きにします。
+        X -90度で車輪を下にして紙面上へ立たせます。
+        Z 180度で車両の頭を左へ向けます。
+
+        position:
+        Z 0.12で紙面から少し持ち上げています。
       -->
       <a-entity
         id="carRoot"
@@ -313,17 +315,19 @@
         rotation="-90 0 180"
         scale="0.20 0.20 0.20"
       >
-      <a-gltf-model
-        id="carModel"
-        src="#carAsset"
-        sliding-door="
-          doorName: Slide_Door;
-          openOffset: -0.28 0 0;
-          duration: 1200;
-        "
-      >
-  </a-gltf-model>
-</a-entity>
+
+        <a-gltf-model
+          id="carModel"
+          src="#carAsset"
+          sliding-door="
+            doorName: Slide_Door;
+            openOffset: -0.26 0 0;
+            duration: 1200;
+          "
+        >
+        </a-gltf-model>
+
+      </a-entity>
     </a-entity>
 
   </a-scene>
@@ -352,9 +356,8 @@
     let experienceRunning = false;
 
     /**
-     * 車両の開始位置と終了位置
-     *
-     * 頭が左向きなので、
+     * 車両の開始位置と終了位置です。
+     * 車両の頭が左向きなので、
      * Xのプラス側からマイナス側へ移動します。
      */
     const CAR_START_POSITION = "0.3 0 0.12";
@@ -372,8 +375,8 @@
     }
 
     /**
-     * 縦持ちでは小さめ、
-     * 横持ちでは少し大きめにします。
+     * 縦持ちは小さめ、
+     * 横持ちは少し大きめに表示します。
      */
     function adjustCarScale() {
       const isPortrait =
@@ -446,7 +449,7 @@
     }
 
     /**
-     * 体験の一連の流れ
+     * 体験の一連の流れです。
      */
     async function startExperience() {
       if (!modelReady || experienceRunning) {
@@ -505,7 +508,7 @@
     }
 
     /**
-     * GLBの読み込み完了
+     * GLBの読み込み完了時
      */
     carModel.addEventListener(
       "model-loaded",
@@ -523,7 +526,7 @@
     );
 
     /**
-     * 認識画像を検出
+     * 認識画像を検出したとき
      */
     target.addEventListener(
       "targetFound",
@@ -536,7 +539,7 @@
     );
 
     /**
-     * 認識画像を見失った場合
+     * 認識画像を見失ったとき
      */
     target.addEventListener(
       "targetLost",
