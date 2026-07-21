@@ -379,6 +379,7 @@
     let experienceRunning = false;
     let trackingPaused = false;
     let screenLocked = false;
+    let lockScheduled = false;
 
     let gyroListenerAdded = false;
     let gyroPermissionGranted = false;
@@ -833,6 +834,78 @@
     }
 
     /**
+     * 認識画像を検出した段階で、
+     * スタートボタンを押す前に画面固定します。
+     *
+     * targetFound直後の姿勢がまだ不安定な場合に備え、
+     * 2フレーム待ってから現在位置を保存します。
+     */
+    function scheduleScreenLock() {
+      if (
+        screenLocked ||
+        lockScheduled ||
+        trackingPaused ||
+        !targetVisible ||
+        !modelReady ||
+        !arSystem
+      ) {
+        return;
+      }
+
+      lockScheduled = true;
+
+      statusBox.textContent =
+        "認識画像を検出しました。表示位置を固定しています";
+
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          lockScheduled = false;
+
+          /**
+           * 待機中に認識画像を見失った場合は、
+           * 固定せず次の認識を待ちます。
+           */
+          if (
+            screenLocked ||
+            trackingPaused ||
+            !targetVisible ||
+            !modelReady ||
+            !arSystem
+          ) {
+            updateStartButton();
+            return;
+          }
+
+          const locked =
+            lockCarToScreen();
+
+          if (!locked) {
+            statusBox.textContent =
+              "表示位置の固定に失敗しました";
+
+            updateStartButton();
+            return;
+          }
+
+          /**
+           * 車両をカメラ側へ移した後、
+           * MindARの画像追跡だけを停止します。
+           * カメラ映像は表示したままです。
+           */
+          arSystem.pause(true);
+          trackingPaused = true;
+
+          statusBox.textContent =
+            gyroPermissionGranted
+              ? "表示位置を固定しました。スマートフォンを傾けて見回せます"
+              : "表示位置を固定しました。体験スタートを押してください";
+
+          updateStartButton();
+        });
+      });
+    }
+
+    /**
      * ジャイロによる目標回転へ、
      * 毎フレーム滑らかに近づけます。
      */
@@ -853,9 +926,14 @@
     }
 
     /**
-     * 車両を画面左方向へ移動させます。
+     * 画面固定した3D表示全体を、
+     * 画面左方向へ移動させます。
+     *
+     * screenAnchorを動かすため、
+     * 車体・扉・今後その配下へ追加した3D表示が
+     * まとめて移動します。
      */
-    function moveCar() {
+    function moveAllContentLeft() {
       return new Promise((resolve) => {
         const startPosition =
           lockedAnchorPosition.clone();
@@ -964,8 +1042,8 @@
       if (
         !modelReady ||
         !arSystem ||
-        experienceRunning ||
-        (!targetVisible && !screenLocked)
+        !screenLocked ||
+        experienceRunning
       ) {
         return;
       }
@@ -978,62 +1056,25 @@
       /**
        * iPhoneではクリック操作中に
        * センサー許可を要求する必要があります。
+       *
+       * 画面位置の固定はすでに完了しているため、
+       * 許可画面を表示しても固定位置は変わりません。
        */
       const gyroEnabled =
         await enableGyroscope();
 
-      /**
-       * 許可画面の表示中に認識画像を外した場合は、
-       * 固定せず認識からやり直します。
-       */
-      if (
-        !screenLocked &&
-        !targetVisible
-      ) {
-        experienceRunning = false;
-
-        startBtn.style.display = "block";
-
-        statusBox.textContent =
-          "もう一度、認識画像にかざしてください";
-
-        updateStartButton();
-        return;
-      }
-
-      if (!screenLocked) {
-        const locked =
-          lockCarToScreen();
-
-        if (!locked) {
-          experienceRunning = false;
-
-          startBtn.style.display = "block";
-
-          statusBox.textContent =
-            "画面固定に失敗しました";
-
-          updateStartButton();
-          return;
-        }
-
-        /**
-         * 車両をカメラ側へ移した後に、
-         * MindARの画像追跡を停止します。
-         * カメラ映像は表示したままです。
-         */
-        arSystem.pause(true);
-        trackingPaused = true;
+      if (gyroEnabled) {
+        calibrateGyroscope();
       }
 
       resetExperienceObjects();
 
       if (gyroEnabled) {
         statusBox.textContent =
-          "表示位置を固定しました。スマートフォンをゆっくり傾けて見回せます";
+          "表示位置は固定済みです。スマートフォンをゆっくり傾けて見回せます";
       } else {
         statusBox.textContent =
-          "表示位置を固定しました。端末方向センサーは利用できません";
+          "表示位置は固定済みです。端末方向センサーは利用できません";
       }
 
       /**
@@ -1064,7 +1105,11 @@
 
       await sleep(800);
 
-      await moveCar();
+      /**
+       * 車体だけでなく、screenAnchor配下の
+       * 3D表示全体を画面左へ動かします。
+       */
+      await moveAllContentLeft();
 
       showMessage(
         "目的地に到着しました"
@@ -1100,6 +1145,7 @@
 
         adjustCarScale();
         updateStartButton();
+        scheduleScreenLock();
       }
     );
 
@@ -1115,10 +1161,8 @@
 
         targetVisible = true;
 
-        statusBox.textContent =
-          "認識画像を検出しました";
-
         updateStartButton();
+        scheduleScreenLock();
       }
     );
 
@@ -1158,6 +1202,7 @@
         sceneEl.systems["mindar-image-system"];
 
       updateStartButton();
+      scheduleScreenLock();
     }
 
     if (sceneEl.hasLoaded) {
@@ -1168,6 +1213,22 @@
         initializeArSystem,
         { once: true }
       );
+    }
+
+    /**
+     * Androidなど、明示的な許可APIが不要な端末では、
+     * 読み込み時点からジャイロを有効にします。
+     *
+     * iPhoneはユーザー操作が必要なため、
+     * 体験スタート時に許可を求めます。
+     */
+    if (
+      typeof window.DeviceOrientationEvent !==
+        "undefined" &&
+      typeof DeviceOrientationEvent
+        .requestPermission !== "function"
+    ) {
+      enableGyroscope();
     }
 
     startBtn.addEventListener(
