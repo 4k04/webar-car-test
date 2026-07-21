@@ -11,7 +11,6 @@
   >
 
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
-
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
@@ -77,7 +76,7 @@
       z-index: 999;
 
       box-sizing: border-box;
-      width: min(90vw, 420px);
+      width: min(90vw, 440px);
       padding: 8px 14px;
 
       border-radius: 10px;
@@ -85,17 +84,18 @@
 
       color: #fff;
       font-size: 14px;
+      line-height: 1.4;
       text-align: center;
     }
   </style>
 
   <script>
     /**
-     * GLB内の扉オブジェクトをスライドさせます。
+     * GLB内のスライド扉だけを動かすコンポーネントです。
      *
      * Blender側の扉オブジェクト名は
      * Slide_Door
-     * とします。
+     * にしておきます。
      */
     AFRAME.registerComponent("sliding-door", {
       schema: {
@@ -105,8 +105,10 @@
         },
 
         /**
-         * 扉を開いたときの移動距離です。
-         * 前回の-0.28から、少しだけ小さい-0.26へ変更。
+         * 扉を開いたときの移動量です。
+         *
+         * マイナス方向へ0.26移動します。
+         * 扉の開き幅は、前回の控えめな設定を維持しています。
          */
         openOffset: {
           type: "vec3",
@@ -168,6 +170,9 @@
         });
       },
 
+      /**
+       * openがtrueなら開く、falseなら閉じます。
+       */
       moveDoor: function (open) {
         if (!this.doorObject || this.isMoving) {
           return Promise.resolve(false);
@@ -187,7 +192,8 @@
 
         return new Promise((resolve) => {
           const animate = (currentTime) => {
-            const elapsed = currentTime - startTime;
+            const elapsed =
+              currentTime - startTime;
 
             const progress = Math.min(
               elapsed / duration,
@@ -195,7 +201,7 @@
             );
 
             /**
-             * 開始時と停止時を少し滑らかにします。
+             * 開始と終了を少し滑らかにします。
              */
             const eased =
               progress < 0.5
@@ -245,6 +251,7 @@
   </button>
 
   <a-scene
+    id="arScene"
     mindar-image="
       imageTargetSrc: ./targets.mind;
       autoStart: true;
@@ -264,8 +271,8 @@
   >
 
     <!--
-      GLBが約30MBあるため、
-     読み込み猶予を長めにしています。
+      GLBの容量が約30MBあるため、
+      読み込み猶予を長めにしています。
     -->
     <a-assets timeout="120000">
       <a-asset-item
@@ -281,14 +288,12 @@
     >
     </a-camera>
 
-    <!-- 車体全体を明るくする光 -->
     <a-light
       type="ambient"
       intensity="1.2"
     >
     </a-light>
 
-    <!-- 太陽光に近い方向性のある光 -->
     <a-light
       type="directional"
       intensity="1.1"
@@ -302,12 +307,11 @@
     >
 
       <!--
-        rotation:
-        X -90度で車輪を下にして紙面上へ立たせます。
-        Z 180度で車両の頭を左へ向けます。
+        X -90度：
+        車輪を下にして紙面上へ立たせます。
 
-        position:
-        Z 0.12で紙面から少し持ち上げています。
+        Z 180度：
+        車両の頭を左へ向けます。
       -->
       <a-entity
         id="carRoot"
@@ -333,6 +337,9 @@
   </a-scene>
 
   <script>
+    const sceneEl =
+      document.getElementById("arScene");
+
     const infoBox =
       document.getElementById("infoBox");
 
@@ -342,21 +349,25 @@
     const startBtn =
       document.getElementById("startBtn");
 
+    const target =
+      document.getElementById("target");
+
     const carRoot =
       document.getElementById("carRoot");
 
     const carModel =
       document.getElementById("carModel");
 
-    const target =
-      document.getElementById("target");
+    let arSystem = null;
 
     let modelReady = false;
     let targetVisible = false;
+    let trackingLocked = false;
     let experienceRunning = false;
 
     /**
      * 車両の開始位置と終了位置です。
+     *
      * 車両の頭が左向きなので、
      * Xのプラス側からマイナス側へ移動します。
      */
@@ -375,8 +386,36 @@
     }
 
     /**
-     * 縦持ちは小さめ、
-     * 横持ちは少し大きめに表示します。
+     * GLBを読み込み、
+     * かつ認識画像を検出した場合だけ
+     * 体験スタートボタンを有効にします。
+     */
+    function updateStartButton() {
+      if (experienceRunning) {
+        return;
+      }
+
+      if (!modelReady) {
+        startBtn.disabled = true;
+        startBtn.textContent = "モデル読み込み中";
+        return;
+      }
+
+      if (!targetVisible) {
+        startBtn.disabled = true;
+        startBtn.textContent = "認識画像を映してください";
+        return;
+      }
+
+      startBtn.disabled = false;
+      startBtn.textContent = "体験スタート";
+    }
+
+    /**
+     * 画面の縦横に応じて車体サイズを変えます。
+     *
+     * 体験開始後は追跡位置を固定するため、
+     * 途中でスマートフォンを回転させない方が自然です。
      */
     function adjustCarScale() {
       const isPortrait =
@@ -393,6 +432,74 @@
           "0.28 0.28 0.28"
         );
       }
+    }
+
+    /**
+     * 現在のターゲット位置・回転・大きさを保存して、
+     * MindARの画像追跡だけを停止します。
+     *
+     * カメラ映像は停止しません。
+     */
+    function lockCurrentTrackingPosition() {
+      if (trackingLocked) {
+        return true;
+      }
+
+      arSystem =
+        sceneEl.systems["mindar-image-system"];
+
+      if (!arSystem) {
+        console.error(
+          "MindARシステムを取得できませんでした。"
+        );
+
+        return false;
+      }
+
+      /**
+       * 追跡停止直前の位置情報を複製します。
+       */
+      const frozenPosition =
+        target.object3D.position.clone();
+
+      const frozenQuaternion =
+        target.object3D.quaternion.clone();
+
+      const frozenScale =
+        target.object3D.scale.clone();
+
+      /**
+       * ARの追跡処理を停止します。
+       * trueを指定することでカメラ映像は維持します。
+       */
+      arSystem.pause(true);
+
+      /**
+       * 停止直前の姿勢を再設定します。
+       */
+      target.object3D.position.copy(
+        frozenPosition
+      );
+
+      target.object3D.quaternion.copy(
+        frozenQuaternion
+      );
+
+      target.object3D.scale.copy(
+        frozenScale
+      );
+
+      target.object3D.visible = true;
+
+      target.object3D.updateMatrix();
+      target.object3D.updateMatrixWorld(true);
+
+      trackingLocked = true;
+
+      statusBox.textContent =
+        "表示位置を固定しました。スマートフォンをなるべくそのまま保持してください";
+
+      return true;
     }
 
     /**
@@ -428,7 +535,7 @@
     }
 
     /**
-     * 扉の開閉を実行します。
+     * 扉を開閉します。
      */
     async function moveDoor(open) {
       const doorComponent =
@@ -449,10 +556,14 @@
     }
 
     /**
-     * 体験の一連の流れです。
+     * 体験の一連の処理です。
      */
     async function startExperience() {
-      if (!modelReady || experienceRunning) {
+      if (
+        !modelReady ||
+        !targetVisible ||
+        experienceRunning
+      ) {
         return;
       }
 
@@ -460,6 +571,21 @@
 
       startBtn.disabled = true;
       startBtn.style.display = "none";
+
+      /**
+       * この時点の認識位置で追跡を止めます。
+       */
+      const locked =
+        lockCurrentTrackingPosition();
+
+      if (!locked) {
+        experienceRunning = false;
+        startBtn.style.display = "block";
+        updateStartButton();
+        return;
+      }
+
+      await sleep(300);
 
       /**
        * 乗車前に扉を開きます。
@@ -505,10 +631,48 @@
       showMessage(
         "ご乗車ありがとうございました"
       );
+
+      statusBox.textContent =
+        "体験が終了しました";
     }
 
     /**
-     * GLBの読み込み完了時
+     * A-Frameシーンの準備完了時
+     */
+    sceneEl.addEventListener(
+      "loaded",
+      () => {
+        arSystem =
+          sceneEl.systems["mindar-image-system"];
+      }
+    );
+
+    /**
+     * MindARの準備完了時
+     */
+    sceneEl.addEventListener(
+      "arReady",
+      () => {
+        if (!modelReady) {
+          statusBox.textContent =
+            "車両モデルを読み込んでいます";
+        }
+      }
+    );
+
+    /**
+     * カメラなどの開始に失敗した場合
+     */
+    sceneEl.addEventListener(
+      "arError",
+      () => {
+        statusBox.textContent =
+          "カメラを開始できませんでした。カメラの使用を許可して、ページを再読み込みしてください";
+      }
+    );
+
+    /**
+     * GLB読み込み完了時
      */
     carModel.addEventListener(
       "model-loaded",
@@ -516,12 +680,12 @@
         modelReady = true;
 
         statusBox.textContent =
-          "認識画像にスマートフォンをかざしてください";
-
-        startBtn.disabled = false;
-        startBtn.textContent = "体験スタート";
+          targetVisible
+            ? "認識画像を検出しました"
+            : "認識画像にスマートフォンをかざしてください";
 
         adjustCarScale();
+        updateStartButton();
       }
     );
 
@@ -531,23 +695,37 @@
     target.addEventListener(
       "targetFound",
       () => {
+        if (trackingLocked) {
+          return;
+        }
+
         targetVisible = true;
 
         statusBox.textContent =
-          "認識画像を検出しました";
+          modelReady
+            ? "認識画像を検出しました。位置がよければ体験を開始してください"
+            : "認識画像を検出しました。モデルを読み込んでいます";
+
+        updateStartButton();
       }
     );
 
     /**
-     * 認識画像を見失ったとき
+     * 体験開始前に認識画像を見失ったとき
      */
     target.addEventListener(
       "targetLost",
       () => {
+        if (trackingLocked) {
+          return;
+        }
+
         targetVisible = false;
 
         statusBox.textContent =
-          "もう一度、認識画像にかざしてください";
+          "もう一度、認識画像にスマートフォンをかざしてください";
+
+        updateStartButton();
       }
     );
 
@@ -570,12 +748,20 @@
 
     window.addEventListener(
       "resize",
-      adjustCarScale
+      () => {
+        if (!trackingLocked) {
+          adjustCarScale();
+        }
+      }
     );
 
     window.addEventListener(
       "orientationchange",
       () => {
+        if (trackingLocked) {
+          return;
+        }
+
         window.setTimeout(
           adjustCarScale,
           200
@@ -584,6 +770,7 @@
     );
 
     adjustCarScale();
+    updateStartButton();
   </script>
 </body>
 </html>
